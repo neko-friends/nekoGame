@@ -1,12 +1,15 @@
+using UnityEditor.Tilemaps;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public class PlayerController : MonoBehaviour
 {
-    [SerializeField]
+    [SerializeField,Header("プレイヤーの移動速度")]
     private float moveSpeed = 5f;//後々データから挿入できるようにする
-    [SerializeField]
+    [SerializeField,Header("ジャンプ力")]
     private float jumpPower = 5f;
+    [SerializeField]
+    private GameObject PosePanel;
 
     private Rigidbody2D rb2d;
 
@@ -16,6 +19,7 @@ public class PlayerController : MonoBehaviour
     void Start()
     {
         rb2d = GetComponent<Rigidbody2D>();
+        PosePanel.SetActive(false);
     }
     void Update()
     {
@@ -49,6 +53,13 @@ public class PlayerController : MonoBehaviour
         if (context.started && isGround)
         {
             rb2d.AddForce(Vector2.up * jumpPower, ForceMode2D.Impulse);
+        }
+    }
+    public void OnPose(InputAction.CallbackContext context)
+    {
+        if(context.started)
+        {
+            PosePanel.SetActive(true);
         }
     }
 }
