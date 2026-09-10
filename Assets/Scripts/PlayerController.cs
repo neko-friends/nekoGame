@@ -16,6 +16,8 @@ public class PlayerController : MonoBehaviour
     private Vector2 moveInput;
     private bool isGround = true;
 
+    private GameObject Item_obj;
+
     void Start()
     {
         rb2d = GetComponent<Rigidbody2D>();
@@ -39,27 +41,68 @@ public class PlayerController : MonoBehaviour
             isGround = false;
         }
     }
+    private void OnTriggerEnter2D(Collider2D collision)
+    {
+        Debug.Log("当たった！");
+        if(collision.gameObject.CompareTag("Item"))
+        {
+            Debug.Log("アイテムを拾った！");
+            Item item = collision.gameObject.GetComponent<Item>();
+
+            if (item != null)
+            {
+                // 生成するPrefabを記憶
+                Item_obj = item.ItemPrefab;
+
+                // 元のItemを削除
+                Destroy(collision.gameObject);
+            }
+        }
+    }
     private void Move()
     {
         transform.Translate(moveInput*moveSpeed*Time.deltaTime);
     }
+    private void ThrowItem()
+    {
+        if (Item_obj == null)
+        {
+            return;
+        }
+        GameObject item = Instantiate(Item_obj,transform.position,Quaternion.identity);
+        Rigidbody2D rb2d_item = item.GetComponent<Rigidbody2D>();
 
-    public void OnMove(InputAction.CallbackContext context)
+        if(rb2d_item != null)
+        {
+            rb2d.linearVelocity = Vector2.right * 10f;
+        }
+        Item_obj = null;    
+    }
+
+    public void OnMove(InputAction.CallbackContext context)//移動
     {
         moveInput = context.ReadValue<Vector2>();
     }
-    public void OnJump(InputAction.CallbackContext context)
+    public void OnJump(InputAction.CallbackContext context)//ジャンプ
     {
         if (context.started && isGround)
         {
             rb2d.AddForce(Vector2.up * jumpPower, ForceMode2D.Impulse);
         }
     }
-    public void OnPose(InputAction.CallbackContext context)
+    public void OnPose(InputAction.CallbackContext context)//ポーズ
     {
         if(context.started)
         {
             PosePanel.SetActive(true);
         }
+    }
+    public void OnThrow(InputAction.CallbackContext context)//投げ
+    {
+        if (context.started)
+        {
+            ThrowItem();
+        }
+
     }
 }
