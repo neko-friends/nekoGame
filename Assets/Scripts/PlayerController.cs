@@ -8,8 +8,6 @@ public class PlayerController : MonoBehaviour
     private float moveSpeed = 5f;//後々データから挿入できるようにする
     [SerializeField,Header("ジャンプ力")]
     private float jumpPower = 5f;
-    [SerializeField]
-    private GameObject PosePanel;
 
     private Rigidbody2D rb2d;
 
@@ -18,10 +16,22 @@ public class PlayerController : MonoBehaviour
 
     private GameObject Item_obj;
 
+    private Transform Posepanel;
+
+    private void Awake()
+    {
+        Canvas canvas = FindFirstObjectByType<Canvas>();
+
+        if (canvas != null)
+        {
+            Posepanel = canvas.transform.Find("PosePanel");
+           
+        }
+    }
     void Start()
     {
         rb2d = GetComponent<Rigidbody2D>();
-        PosePanel.SetActive(false);
+        Posepanel.gameObject.SetActive(false);
     }
     void Update()
     {
@@ -94,7 +104,7 @@ public class PlayerController : MonoBehaviour
     {
         if(context.started)
         {
-            PosePanel.SetActive(true);
+            Posepanel.gameObject.SetActive(true);
         }
     }
     public void OnThrow(InputAction.CallbackContext context)//投げ
