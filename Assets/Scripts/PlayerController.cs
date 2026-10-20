@@ -33,7 +33,8 @@ public class PlayerController : MonoBehaviour
         rb2d = GetComponent<Rigidbody2D>();
         Posepanel.gameObject.SetActive(false);
     }
-    void Update()
+
+    private void FixedUpdate()
     {
         Move();
     }
@@ -69,10 +70,20 @@ public class PlayerController : MonoBehaviour
             }
         }
     }
+
+
+ 
+
     private void Move()
     {
-        transform.Translate(moveInput*moveSpeed*Time.deltaTime);
+        // 横方向の速度だけ変更し、縦方向の速度は維持する
+        rb2d.linearVelocity = new Vector2(
+            moveInput.x * moveSpeed,
+            rb2d.linearVelocity.y
+        );
     }
+
+
     private void ThrowItem()
     {
         if (Item_obj == null)
