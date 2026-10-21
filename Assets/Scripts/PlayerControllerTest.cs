@@ -2,7 +2,7 @@ using UnityEditor.Tilemaps;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-public class PlayerController : MonoBehaviour
+public class PlayerControlleTestr : MonoBehaviour
 {
     [SerializeField,Header("プレイヤーの移動速度")]
     private float moveSpeed = 5f;//後々データから挿入できるようにする
