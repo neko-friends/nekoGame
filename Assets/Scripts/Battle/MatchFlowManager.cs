@@ -1,3 +1,4 @@
+using NUnit.Framework.Interfaces;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -42,6 +43,44 @@ public class MatchFlowManager : MonoBehaviour
     {
         UnsubscribePlayer(leftPlayer);
         UnsubscribePlayer(rightPlayer);
+    }
+
+    /// <summary>
+    /// タイマー終了時に進行度を比較して勝者を決定する。
+    /// 同点の場合は左陣営の勝利。
+    /// </summary>
+    public void NotifyTimeExpired()
+    {
+        if (matchEnded)
+        {
+            return;
+        }
+
+        if (progressManager == null)
+        {
+            Debug.LogError(
+                "MatchFlowManager: TeamProgressManagerが設定されていません。"
+            );
+            return;
+        }
+
+        int leftScore =
+            progressManager.GetProgressScore(TeamSide.Left);
+
+        int rightScore =
+            progressManager.GetProgressScore(TeamSide.Right);
+
+        Debug.Log(
+            $"タイムアップ！ 左陣営={leftScore} / 右陣営={rightScore}"
+        );
+
+        // 同点なら左陣営が勝利。
+        TeamSide winnerSide =
+            leftScore >= rightScore
+                ? TeamSide.Left
+                : TeamSide.Right;
+
+        FinishMatch(winnerSide);
     }
 
     /// <summary>
@@ -184,8 +223,15 @@ public class MatchFlowManager : MonoBehaviour
     /// </summary>
     public void NotifyCastleDestroyed(TeamSide winnerSide)
     {
+        FinishMatch(winnerSide);
+    }
+
+    private void FinishMatch(TeamSide winnerSide)
+    {
         if (matchEnded)
+        {
             return;
+        }
 
         matchEnded = true;
 
@@ -196,14 +242,12 @@ public class MatchFlowManager : MonoBehaviour
 
         string winnerCharacterId = "";
 
-        if (winnerPlayerNumber >= 1 &&
+        if (GameSession.Seats != null &&
+            winnerPlayerNumber > 0 &&
             winnerPlayerNumber <= GameSession.Seats.Length)
         {
-            PlayerSessionData seat =
-                GameSession.Seats[winnerPlayerNumber - 1];
-
-            if (seat != null)
-                winnerCharacterId = seat.characterID;
+            winnerCharacterId =
+                GameSession.Seats[winnerPlayerNumber - 1].characterID;
         }
 
         MatchResultData.SetResult(

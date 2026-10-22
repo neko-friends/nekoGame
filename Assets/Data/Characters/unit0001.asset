@@ -13,9 +13,10 @@ MonoBehaviour:
   m_Name: unit0001
   m_EditorClassIdentifier: Assembly-CSharp::CharacterData
   characterID: unit0001
-  displayName: 
+  displayName: kyohineko
   parameters:
     maxHp: 100
+    atk: 100
     moveSpeed: 5
     jumpSpeed: 8
     maxJumps: 2
@@ -23,14 +24,25 @@ MonoBehaviour:
     throwSpeed: 10
     throwSpawnOffset: 0.5
     guardMax: 100
+    guardDrainDelaySeconds: 0.5
     guardDrainPerSecond: 10
+    guardDrainPauseAfterHitSeconds: 0.5
+    guardRegenDelaySeconds: 3
     guardRegenPerSecond: 15
     guardPushback: 3
     guardPushbackDecay: 0.8
     guardBreakStunSeconds: 2
     guardAfterBreakRatio: 0.5
+    normalAttackMultiplier: 0.5
+    neutralSpecialMultiplier: 1.2
+    sideSpecialMultiplier: 0.75
+    upSpecialMultiplier: 1.5
+    downSpecialMultiplier: 1
     attackStartupFrames: 6
     attackActiveFrames: 4
     attackRecoveryFrames: 14
     attackLungeSpeed: 2
+    attackKnockbackX: 4
+    attackKnockbackY: 3
+    attackHitstunFrames: 20
     knockbackDecayPerFrame: 0.92

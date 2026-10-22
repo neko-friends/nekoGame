@@ -12,9 +12,9 @@ public enum TeamProgressStage
 [Serializable]
 public class TeamProgressRecord
 {
-    [SerializeField] private int currentFieldIndex = 1;
+    [SerializeField] public int currentFieldIndex = 1;
     [SerializeField]
-    private TeamProgressStage stage =
+    public TeamProgressStage stage =
         TeamProgressStage.InitialCenter;
     [SerializeField] private bool hasDiedOnce;
 
@@ -123,4 +123,28 @@ public class TeamProgressManager : MonoBehaviour
             record.CurrentFieldIndex
         );
     }
+
+    /// <summary>
+    /// 陣営の進行度を比較するための点数を返す。
+    /// 左陣営は右へ、右陣営は左へ進むほど点数が高くなる。
+    /// </summary>
+    public int GetProgressScore(TeamSide side)
+    {
+        TeamProgressRecord record =
+            side == TeamSide.Left ? leftProgress : rightProgress;
+
+        // フィールド番号は左=0、中央=1、右=2を想定。
+        // 左陣営は番号が大きいほど前進、右陣営は小さいほど前進。
+        int fieldProgress =
+            side == TeamSide.Left
+                ? record.currentFieldIndex
+                : 2 - record.currentFieldIndex;
+
+        // フィールドの進行を優先し、城前まで到達していれば加点。
+        int stageBonus =
+            record.stage == TeamProgressStage.CastleFront ? 1 : 0;
+
+        return fieldProgress * 10 + stageBonus;
+    }
+
 }

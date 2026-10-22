@@ -1,40 +1,99 @@
+
 using UnityEngine;
 using TMPro;
 
 public class GameTimer : MonoBehaviour
 {
-    [SerializeField] 
+    [SerializeField]
     private TextMeshProUGUI timerText;
-    [SerializeField,Header("タイマー:分単位でも秒で入力")]
-    private float startTime = 60f;//分を秒で書き込む
+
+    [SerializeField, Header("制限時間（秒）")]
+    private float startTime = 60f;
+
+    [SerializeField, Header("試合進行管理")]
+    private MatchFlowManager matchFlowManager;
 
     private float currentTime;
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
+    private bool hasEnded;
+
     void Start()
     {
-        currentTime = startTime;
+        currentTime = Mathf.Max(0f, startTime);
         UpdateTimerText();
-    }
 
-    // Update is called once per frame
-    void Update()
-    {
-        if(currentTime>0)
+        // 制限時間が最初から0秒の場合にも終了処理を行う。
+        if (currentTime <= 0f)
         {
-            currentTime -= Time.deltaTime;
-            if(currentTime < 0 )
-            {
-                currentTime = 0;
-            }
-            UpdateTimerText();
+            EndTimer();
         }
     }
-    
-    void UpdateTimerText()
-    {
-        int minutes = Mathf.FloorToInt(currentTime / 60);
-        int seconds = Mathf.FloorToInt(currentTime % 60);
 
-        timerText.text = string.Format("{0:00}:{1:00}", minutes, seconds);
+    void Update()
+    {
+        if (hasEnded)
+        {
+            return;
+        }
+
+        if (currentTime > 0f)
+        {
+            currentTime -= Time.deltaTime;
+
+            if (currentTime < 0f)
+            {
+                currentTime = 0f;
+            }
+
+            UpdateTimerText();
+
+            if (currentTime <= 0f)
+            {
+                EndTimer();
+            }
+        }
+    }
+
+    private void EndTimer()
+    {
+        if (hasEnded)
+        {
+            return;
+        }
+
+        hasEnded = true;
+        currentTime = 0f;
+        UpdateTimerText();
+
+        if (matchFlowManager == null)
+        {
+            Debug.LogError(
+                "GameTimer: MatchFlowManagerが設定されていません。",
+                this
+            );
+            return;
+        }
+
+        matchFlowManager.NotifyTimeExpired();
+    }
+
+    private void UpdateTimerText()
+    {
+        if (timerText == null)
+        {
+            Debug.LogWarning(
+                "GameTimer: Timer Textが設定されていません。",
+                this
+            );
+            return;
+        }
+
+        int minutes = Mathf.FloorToInt(currentTime / 60f);
+        int seconds = Mathf.FloorToInt(currentTime % 60f);
+
+        timerText.text = string.Format(
+            "{0:00}:{1:00}",
+            minutes,
+            seconds
+        );
     }
 }
