@@ -1,498 +1,256 @@
-using System;
-using System.Xml;
-using UnityEditor.U2D.Animation;
 using UnityEngine;
 
-/// <summary>必殺技の方向入力(キャラの向き基準。「前」は向いている側)。</summary>
-public enum SpecialDirection { Neutral, Forward, Up, Down }
-
-/// <summary>攻撃を受けたときに渡す情報。攻撃側が作り、ReceiveHit に渡す。</summary>
-public struct HitInfo
+// =====================================================================
+// 通常: 待機・走り・ジャンプ・空中移動をまとめた基本状態。
+// 他の状態へ移る「入口」はここに集約している。
+// =====================================================================
+public class NeutralState : CharacterState
 {
-    public float damage;          // HPへのダメージ
-    public Vector2 knockback;     // ノックバック速度(ワールド座標。左右の向きは攻撃側が決める)
-    public int hitstunFrames;     // のけぞりフレーム数
-    public float guardDamage;     // ガード耐久値へのダメージ
+    public NeutralState(PlayerController owner) : base(owner) { }
+
+    public override Color DebugColor => Color.white;
+
+    public override void Tick()
+    {
+        var c = owner.Controls;
+        var p = owner.Params;
+        int buffer = p.inputBufferFrames;
+
+        // 移動
+        Vector2 move = c.MoveInput;
+        owner.Face(move.x);
+        owner.SetVelocityX(move.x * p.moveSpeed);
+
+        // ジャンプ(残り回数があるときだけ入力を消費する。無ければ猶予の間、入力を保持)
+        if (owner.JumpsLeft > 0 && c.Jump.TryConsumePress(buffer))
+        {
+            owner.TryJump();
+        }
+
+        // 通常攻撃
+        if (c.Attack.TryConsumePress(buffer))
+        {
+            owner.Machine.Change(owner.Attack);
+            return;
+        }
+
+        // 必殺技(中身は技データの接続後に実装。今は方向の判定だけ確認できる)
+        if (c.Special.TryConsumePress(buffer))
+        {
+            Debug.Log($"必殺技(未実装) 方向: {owner.ReadSpecialDirection()}");
+        }
+
+        // アイテムを拾う / 投げる
+        if (c.Throw.TryConsumePress(buffer))
+        {
+            owner.ThrowOrPickup();
+        }
+
+        // ガード(空中でも可)
+        if (c.Guard.IsHeld && owner.GuardDurability > 0f)
+        {
+            owner.Machine.Change(owner.Guard);
+        }
+    }
 }
 
-/// <summary>
-/// キャラごとの数値。スプレッドシート(CSV)から CharacterData に流し込む入れ物。
-/// 項目名はCSVの列見出しと一致させる(エディタの取り込みが項目名で対応づける)。
-/// ※ 既存の項目名は変更していない。企画書に合わせて既定値だけ更新し、項目を追加した。
-/// </summary>
-[Serializable]
-public class CharacterParams
+// =====================================================================
+// 通常攻撃(単発): 発生 → 持続 → 硬直。フレーム数は CharacterParams で設定。
+// 持続中だけ AttackHitboxActive が true になる(判定の実装は次のステップ)。
+// =====================================================================
+public class AttackState : CharacterState
 {
-    [Header("基本")]
-    public float maxHp = 100f;
-    [Tooltip("【仮値】企画書に数値の記載なし。ダメージ = atk × 技補正値(次のステップで使用)")]
-    public float atk = 100f;
-    public float moveSpeed = 5f;
-    public float jumpSpeed = 8f;
-    public int maxJumps = 2;               // 2段ジャンプ = 2
-    public int inputBufferFrames = 6;      // 先行入力の猶予(フレーム)
+    public AttackState(PlayerController owner) : base(owner) { }
 
-    [Header("アイテム投げ")]
-    public float throwSpeed = 10f;
-    public float throwSpawnOffset = 0.5f;
+    public override Color DebugColor => Color.yellow;
 
-    [Header("ガード(企画書の値)")]
-    public float guardMax = 1000f;
-    public float guardDrainDelaySeconds = 0.5f;          // ガード開始からこの時間後に自然消費が始まる
-    public float guardDrainPerSecond = 250f;             // 自然消費の速度
-    public float guardDrainPauseAfterHitSeconds = 0.5f;  // 被弾で耐久値が減ったあと、自然消費を止める時間
-    public float guardRegenDelaySeconds = 3f;            // ガードをやめてから回復が始まるまで
-    public float guardRegenPerSecond = 25f;              // 回復の速度
-    public float guardPushback = 3f;                     // 被弾時の押し戻し速度
-    public float guardPushbackDecay = 0.8f;              // 押し戻しの減衰(1フレームごとの倍率)
-    public float guardBreakStunSeconds = 2f;             // 崩壊時のスタン時間
-    public float guardAfterBreakRatio = 1f;              // 崩壊から復帰したときの耐久値の割合(1 = 全回復)
+    public override void Enter()
+    {
+        owner.AttackHitboxActive = false;
+        owner.SetVelocityX(0f);
+    }
 
-    [Header("技補正値(企画書:拒否猫の値)")]
-    public float normalAttackMultiplier = 0.5f;
-    public float neutralSpecialMultiplier = 1.2f;
-    public float sideSpecialMultiplier = 0.75f;
-    public float upSpecialMultiplier = 1.5f;
-    public float downSpecialMultiplier = 1f;
+    public override void Tick()
+    {
+        var p = owner.Params;
 
-    [Header("通常攻撃(フレーム)")]
-    public int attackStartupFrames = 6;
-    public int attackActiveFrames = 4;
-    public int attackRecoveryFrames = 14;
-    public float attackLungeSpeed = 2f;         // 踏み込み速度
+        int activeStart = p.attackStartupFrames;
+        int activeEnd = p.attackStartupFrames + p.attackActiveFrames;
+        int total = activeEnd + p.attackRecoveryFrames;
 
-    [Header("のけぞり")]
-    public float knockbackDecayPerFrame = 0.92f; // ノックバックの減衰(1フレームごとの倍率)
+        // 持続フレームの間だけ判定が有効
+        owner.AttackHitboxActive = Frames > activeStart && Frames <= activeEnd;
+
+        // 発生〜持続の間は少し前へ踏み込む
+        bool lunging = Frames <= activeEnd;
+        owner.SetVelocityX(lunging ? owner.Facing * p.attackLungeSpeed : 0f);
+
+        if (Frames >= total)
+        {
+            owner.Machine.Change(owner.Neutral);
+        }
+    }
+
+    public override void Exit()
+    {
+        owner.AttackHitboxActive = false;
+    }
 }
 
-/// <summary>
-/// キャラの「体」。入力は PlayerInputReceiver から読み取り、行動は状態機械が決める。
-/// このクラスは「共通の部品(移動・ジャンプ・接地・アイテム・被弾)」を提供し、
-/// 「いま何ができるか」は各 State が判断する。
-/// </summary>
-public class PlayerController : MonoBehaviour
+// =====================================================================
+// ガード: 押している間有効。
+// 企画書の仕様:
+//  ・ガード開始から一定時間(既定0.5秒)後に、耐久値が徐々に減り始める
+//  ・被弾で耐久値が減ったら、その後一定時間(既定0.5秒)は自然消費を止める
+//  ・ガードをやめてから一定時間(既定3秒)後に回復が始まる(Exit で待ち時間をセット)
+//  ・耐久値が0になると崩壊(GuardBreakState)
+// =====================================================================
+public class GuardState : CharacterState
 {
-    [Header("入力の受け取り元(未設定なら同じオブジェクトから自動取得)")]
-    [SerializeField] private PlayerInputReceiver inputReceiver;
+    public GuardState(PlayerController owner) : base(owner) { }
 
-    [Header("キャラの数値")]
-    [Tooltip("設定すると、この数値(スプレッドシートから取り込んだもの)を使う。未設定なら下の Parameters を使う")]
-    [SerializeField] private CharacterData characterData;
-    [SerializeField] private CharacterParams parameters = new CharacterParams();
+    public override Color DebugColor => Color.cyan;
 
-    [Header("デバッグ")]
-    [Tooltip("状態ごとに色を変える仮の絵(任意)")]
-    [SerializeField] private SpriteRenderer debugRenderer;
-    [SerializeField] private bool showDebugLabel = true;
-
-    // ---- 外部(各State・他スクリプト)から見えるもの ----
-    public PlayerInputReceiver Controls => inputReceiver;
-    public CharacterParams Params => parameters;
-    public Rigidbody2D Body { get; private set; }
-    public StateMachine Machine { get; private set; }
-
-    public NeutralState Neutral { get; private set; }
-    public AttackState Attack { get; private set; }
-    public GuardState Guard { get; private set; }
-    public GuardBreakState GuardBreak { get; private set; }
-    public HitstunState Hitstun { get; private set; }
-    public DeadState Dead { get; private set; }
-
-    public int Facing { get; private set; } = 1;       // 右が1、左が-1
-    public bool IsGrounded { get; private set; }
-    public int JumpsLeft { get; private set; }
-    public float Hp { get; private set; }
-    public float GuardDurability { get; set; }
-    public bool AttackHitboxActive { get; set; }       // 攻撃の判定が有効なフレームか
-
-    // ガードの待ち時間(フレーム)。GuardState が設定し、FixedUpdate で減らす
-    public int GuardDrainHoldFrames { get; set; }      // 被弾後、自然消費を止める残りフレーム
-    public int GuardRegenWaitFrames { get; set; }      // ガードをやめてから、回復が始まるまでの残りフレーム
-
-    public event Action<PlayerController> Died;
-
-    // ---- 内部 ----
-    private Collider2D bodyCollider;
-    private readonly ContactPoint2D[] contacts = new ContactPoint2D[8];
-
-    private GameObject heldItemPrefab;   // 持っているアイテム
-    private Item nearbyItem;             // 拾える範囲にあるアイテム
-
-    private Transform posePanel;
-
-    // =================================================================
-    // Unity イベント
-    // =================================================================
-    private void Awake()
+    public override void Enter()
     {
-        Body = GetComponent<Rigidbody2D>();
-        bodyCollider = GetComponent<Collider2D>();
+        owner.SetVelocityX(0f);
+        owner.GuardDrainHoldFrames = 0;
+    }
 
-        // 倒れない・眠らない設定(接地判定が接触情報に頼るため)
-        Body.freezeRotation = true;
-        Body.sleepMode = RigidbodySleepMode2D.NeverSleep;
+    public override void Tick()
+    {
+        var c = owner.Controls;
+        var p = owner.Params;
 
-        if (inputReceiver == null)
+        // 向きだけ変えられる。押し戻された勢いは徐々に減らす
+        owner.Face(c.MoveInput.x);
+        owner.SetVelocityX(owner.Body.linearVelocity.x * p.guardPushbackDecay);
+
+        // 長押しでも耐久値は減る(開始の待ち時間が過ぎてから。被弾直後は止まる)
+        bool drainStarted = Frames > owner.SecondsToFrames(p.guardDrainDelaySeconds);
+        if (drainStarted && owner.GuardDrainHoldFrames <= 0)
         {
-            inputReceiver = GetComponent<PlayerInputReceiver>();
+            owner.GuardDurability -= p.guardDrainPerSecond * Time.fixedDeltaTime;
         }
 
-        // CharacterData が設定されていれば、その数値を使う(初期値を使う前に適用する)
-        if (characterData != null)
+        if (owner.GuardDurability <= 0f)
         {
-            ApplyCharacterData(characterData);
-        }
-
-        // 状態の生成
-        Machine = new StateMachine();
-        Neutral = new NeutralState(this);
-        Attack = new AttackState(this);
-        Guard = new GuardState(this);
-        GuardBreak = new GuardBreakState(this);
-        Hitstun = new HitstunState(this);
-        Dead = new DeadState(this);
-        Machine.Changed += OnStateChanged;
-
-        // 初期値
-        Hp = parameters.maxHp;
-        GuardDurability = parameters.guardMax;
-        JumpsLeft = parameters.maxJumps;
-
-        // ポーズ画面(試合管理側へ移すまでは従来どおりここで探す)
-        Canvas canvas = FindFirstObjectByType<Canvas>();
-        if (canvas != null)
-        {
-            posePanel = canvas.transform.Find("PosePanel");
-        }
-
-        Machine.Change(Neutral);
-    }
-
-    private void Start()
-    {
-        if (posePanel != null)
-        {
-            posePanel.gameObject.SetActive(false);
-        }
-        else
-        {
-            Debug.LogWarning("PosePanelが見つかりません。Canvas内の名前を確認してください。");
-        }
-
-        if (inputReceiver == null)
-        {
-            Debug.LogError("PlayerInputReceiverが見つかりません。同じオブジェクトに追加してください。");
-        }
-    }
-
-    // ポーズはゲームの進行(状態機械)とは無関係に受け付ける
-    private void Update()
-    {
-        if (inputReceiver == null) return;
-
-        if (inputReceiver.Pose.TryConsumePress(parameters.inputBufferFrames))
-        {
-            OpenPose();
-        }
-    }
-
-    // ゲームの進行はすべて FixedUpdate(固定フレーム)で行う
-    private void FixedUpdate()
-    {
-        if (inputReceiver == null) return;
-
-        inputReceiver.AdvanceFrame();   // 入力バッファの時間を進める
-        UpdateGrounded();               // 接地とジャンプ回数の管理
-        RegenerateGuard();              // ガード耐久値の回復
-        Machine.Tick();                 // 現在の状態を1フレーム進める
-    }
-
-    private void OnTriggerEnter2D(Collider2D other)
-    {
-        if (!other.CompareTag("Item")) return;
-
-        Item item = other.GetComponent<Item>();
-        if (item != null) nearbyItem = item;
-    }
-
-    private void OnTriggerExit2D(Collider2D other)
-    {
-        if (nearbyItem != null && other.gameObject == nearbyItem.gameObject)
-        {
-            nearbyItem = null;
-        }
-    }
-
-    // =================================================================
-    // キャラデータの適用
-    // =================================================================
-
-    /// <summary>
-    /// CharacterData の数値をコピーして使う(元のアセットを書き換えないため複製する)。
-    /// 試合シーンで GameSession の characterID から選んだデータを渡す場合にも使える。
-    /// </summary>
-    public void ApplyCharacterData(CharacterData data)
-    {
-        if (data == null) return;
-
-        characterData = data;
-        parameters = JsonUtility.FromJson<CharacterParams>(JsonUtility.ToJson(data.parameters));
-    }
-
-    // =================================================================
-    // 各Stateが使う共通の部品
-    // =================================================================
-
-    /// <summary>入力が一定以上のときだけ向きを変える。</summary>
-    public void Face(float x)
-    {
-        if (x > 0.01f) Facing = 1;
-        else if (x < -0.01f) Facing = -1;
-    }
-
-    // 速度を書き込むのは「いまの状態」だけにする(取り合いを防ぐ)
-    public void SetVelocityX(float x)
-    {
-        Body.linearVelocity = new Vector2(x, Body.linearVelocity.y);
-    }
-
-    public void SetVelocity(Vector2 velocity)
-    {
-        Body.linearVelocity = velocity;
-    }
-
-    /// <summary>ジャンプ。残り回数がなければ何もしない。</summary>
-    public bool TryJump()
-    {
-        if (JumpsLeft <= 0) return false;
-
-        JumpsLeft--;
-        Body.linearVelocity = new Vector2(Body.linearVelocity.x, parameters.jumpSpeed);
-        return true;
-    }
-
-    /// <summary>必殺ボタンを押したときの方向(キャラの向き基準)。上下が優先。</summary>
-    public SpecialDirection ReadSpecialDirection()
-    {
-        Vector2 m = inputReceiver.MoveInput;
-
-        if (m.y > 0.5f) return SpecialDirection.Up;
-        if (m.y < -0.5f) return SpecialDirection.Down;
-        if (m.x * Facing > 0.5f) return SpecialDirection.Forward;
-        return SpecialDirection.Neutral;
-    }
-
-    /// <summary>投擲ボタン: アイテムを持っていれば投げ、持っていなければ近くのものを拾う。</summary>
-    public void ThrowOrPickup()
-    {
-        if (heldItemPrefab != null)
-        {
-            ThrowHeldItem();
+            owner.Machine.Change(owner.GuardBreak);
             return;
         }
 
-        if (nearbyItem != null && nearbyItem.ItemPrefab != null)
+        if (!c.Guard.IsHeld)
         {
-            heldItemPrefab = nearbyItem.ItemPrefab;
-            Destroy(nearbyItem.gameObject);
-            nearbyItem = null;
-            Debug.Log("アイテムを拾った！");
+            owner.Machine.Change(owner.Neutral);
         }
     }
 
-    public int SecondsToFrames(float seconds)
+    /// <summary>ガード中に攻撃を受けたとき。ダメージは防ぎ、耐久値だけが減る。</summary>
+    public void Absorb(HitInfo hit)
     {
-        return Mathf.Max(1, Mathf.RoundToInt(seconds / Time.fixedDeltaTime));
-    }
+        owner.GuardDurability -= hit.guardDamage;
 
-    // =================================================================
-    // 被弾・撃破・復活
-    // =================================================================
+        // 被弾で耐久値が減ったあとは、しばらく自然消費を止める
+        owner.GuardDrainHoldFrames = owner.SecondsToFrames(owner.Params.guardDrainPauseAfterHitSeconds);
 
-    /// <summary>攻撃を受ける。ガード中ならダメージを防ぎ、そうでなければのけぞる。</summary>
-    public void ReceiveHit(HitInfo hit)
-    {
-        if (Machine.Current == Dead) return;
+        float dir = Mathf.Sign(hit.knockback.x);
+        if (dir == 0f) dir = -owner.Facing;
+        owner.SetVelocityX(dir * owner.Params.guardPushback);
 
-        // ガード中: ダメージなし。耐久値だけが減る
-        if (Machine.Current == Guard)
+        if (owner.GuardDurability <= 0f)
         {
-            Guard.Absorb(hit);
-            return;
-        }
-
-        Hp -= hit.damage;
-
-        if (Hp <= 0f)
-        {
-            Hp = 0f;
-            Machine.Change(Dead);
-            return;
-        }
-
-        // ガード崩壊中はダメージだけ受ける(スタンは延長も中断もしない)
-        if (Machine.Current == GuardBreak) return;
-
-        Hitstun.Begin(hit);
-        Machine.Change(Hitstun);
-    }
-
-    /// <summary>DeadState から呼ばれる。撃破の通知(進行権の処理などは試合管理側が購読する)。</summary>
-    public void NotifyDied()
-    {
-        Died?.Invoke(this);
-    }
-
-    /// <summary>復活。試合管理側から呼ぶ想定。</summary>
-    public void Revive(Vector2 position)
-    {
-        Hp = parameters.maxHp;
-        GuardDurability = parameters.guardMax;
-        GuardDrainHoldFrames = 0;
-        GuardRegenWaitFrames = 0;
-        JumpsLeft = parameters.maxJumps;
-        AttackHitboxActive = false;
-
-        Body.position = position;
-        Body.linearVelocity = Vector2.zero;
-        inputReceiver.ClearBuffers();
-
-        Machine.Change(Neutral);
-    }
-
-    // =================================================================
-    // 内部処理
-    // =================================================================
-
-    private void UpdateGrounded()
-    {
-        bool wasGrounded = IsGrounded;
-        IsGrounded = CheckGround();
-
-        if (IsGrounded && Body.linearVelocity.y <= 0.01f)
-        {
-            // 着地: ジャンプ回数を回復(上昇中は回復させない)
-            JumpsLeft = parameters.maxJumps;
-        }
-        else if (wasGrounded && !IsGrounded && JumpsLeft >= parameters.maxJumps)
-        {
-            // ジャンプせずに地面から離れた(落下): 1回分を消費した扱い
-            JumpsLeft = parameters.maxJumps - 1;
+            owner.Machine.Change(owner.GuardBreak);
         }
     }
 
-    // 足元で Ground タグの物体に接触しているか(壁の側面・天井は除く)
-    private bool CheckGround()
+    public override void Exit()
     {
-        int count = Body.GetContacts(contacts);
-        float centerY = bodyCollider.bounds.center.y;
+        // ガードをやめた時点から、回復までの待ち時間を数え始める
+        owner.GuardRegenWaitFrames = owner.SecondsToFrames(owner.Params.guardRegenDelaySeconds);
+    }
+}
 
-        for (int i = 0; i < count; i++)
-        {
-            ContactPoint2D c = contacts[i];
+// =====================================================================
+// ガード崩壊: 耐久値が尽きたあとのスタン(既定2秒)。操作不能。
+// =====================================================================
+public class GuardBreakState : CharacterState
+{
+    private int durationFrames;
 
-            bool isGroundTag =
-                c.collider.CompareTag("Ground") || c.otherCollider.CompareTag("Ground");
+    public GuardBreakState(PlayerController owner) : base(owner) { }
 
-            // 法線がほぼ上下向き、かつ接触点がキャラの中心より下
-            if (isGroundTag && Mathf.Abs(c.normal.y) > 0.7f && c.point.y < centerY)
-            {
-                return true;
-            }
-        }
+    public override Color DebugColor => Color.magenta;
 
-        return false;
+    public override void Enter()
+    {
+        owner.GuardDurability = 0f;
+        owner.Controls.ClearBuffers();
+        owner.SetVelocityX(0f);
+        durationFrames = owner.SecondsToFrames(owner.Params.guardBreakStunSeconds);
     }
 
-    private void RegenerateGuard()
+    public override void Tick()
     {
-        // 被弾後の「自然消費ストップ」の残り時間は、状態に関係なく進める
-        if (GuardDrainHoldFrames > 0) GuardDrainHoldFrames--;
+        owner.SetVelocityX(0f);
 
-        CharacterState s = Machine.Current;
-        if (s == Guard || s == GuardBreak || s == Dead) return;
-
-        // ガードをやめてから一定時間は回復しない(企画書:3秒後から回復)
-        if (GuardRegenWaitFrames > 0)
+        if (Frames >= durationFrames)
         {
-            GuardRegenWaitFrames--;
-            return;
-        }
-
-        GuardDurability = Mathf.Min(
-            parameters.guardMax,
-            GuardDurability + parameters.guardRegenPerSecond * Time.fixedDeltaTime
-        );
-    }
-
-    private void ThrowHeldItem()
-    {
-        // 入力方向へ投げる。入力がなければ向いている方向
-        Vector2 aim = inputReceiver.MoveInput;
-        Vector2 direction = aim.sqrMagnitude > 0.25f
-            ? aim.normalized
-            : Vector2.right * Facing;
-
-        Vector3 spawnPosition =
-            transform.position + (Vector3)(direction * parameters.throwSpawnOffset);
-
-        GameObject item = Instantiate(heldItemPrefab, spawnPosition, Quaternion.identity);
-
-        Rigidbody2D itemRb = item.GetComponent<Rigidbody2D>();
-        if (itemRb != null)
-        {
-            itemRb.linearVelocity = direction * parameters.throwSpeed;
-        }
-        else
-        {
-            Debug.LogWarning("投げたアイテムにRigidbody2Dがありません。");
-        }
-
-        heldItemPrefab = null;
-    }
-
-    private void OpenPose()
-    {
-        if (posePanel != null)
-        {
-            posePanel.gameObject.SetActive(true);
+            // 復帰時は耐久値を回復して戻る(割合は CharacterParams。企画書では全回復)
+            owner.GuardDurability = owner.Params.guardMax * owner.Params.guardAfterBreakRatio;
+            owner.GuardRegenWaitFrames = 0;
+            owner.Machine.Change(owner.Neutral);
         }
     }
+}
 
-    private void OnStateChanged(CharacterState previous, CharacterState next)
+// =====================================================================
+// のけぞり: 被弾後の硬直。ノックバック速度を入った瞬間に一度だけ設定し、
+// あとは減衰に任せる。操作不能。
+// =====================================================================
+public class HitstunState : CharacterState
+{
+    private HitInfo hit;
+
+    public HitstunState(PlayerController owner) : base(owner) { }
+
+    public override Color DebugColor => Color.red;
+
+    // 状態へ入る前に、受けた攻撃の情報をセットする
+    public void Begin(HitInfo incoming)
     {
-        if (debugRenderer != null)
+        hit = incoming;
+    }
+
+    public override void Enter()
+    {
+        owner.Controls.ClearBuffers();
+        owner.SetVelocity(hit.knockback);
+    }
+
+    public override void Tick()
+    {
+        owner.SetVelocityX(owner.Body.linearVelocity.x * owner.Params.knockbackDecayPerFrame);
+
+        if (Frames >= hit.hitstunFrames)
         {
-            debugRenderer.color = next.DebugColor;
+            owner.Machine.Change(owner.Neutral);
         }
     }
+}
 
-    // =================================================================
-    // デバッグ
-    // =================================================================
+// =====================================================================
+// 撃破: HPが0。復活は試合管理側が Revive() を呼んで行う想定。
+// =====================================================================
+public class DeadState : CharacterState
+{
+    public DeadState(PlayerController owner) : base(owner) { }
 
-    // インスペクターの ︙ メニューから実行できるテスト用の被弾
-    [ContextMenu("テスト: 被弾(左から攻撃された想定)")]
-    private void DebugTakeHit()
+    public override Color DebugColor => Color.gray;
+
+    public override void Enter()
     {
-        ReceiveHit(new HitInfo
-        {
-            damage = 10f,
-            knockback = new Vector2(4f, 3f),
-            hitstunFrames = 20,
-            guardDamage = 25f
-        });
-    }
-
-    private void OnGUI()
-    {
-        if (!showDebugLabel || Camera.main == null || Machine == null || Machine.Current == null) return;
-
-        Vector3 p = Camera.main.WorldToScreenPoint(transform.position + Vector3.up * 1.2f);
-
-        GUI.Label(
-            new Rect(p.x - 70f, Screen.height - p.y - 40f, 160f, 60f),
-            $"{Machine.Current.Name}\nHP {Hp:0}  Guard {GuardDurability:0}  Jump {JumpsLeft}"
-        );
+        owner.Controls.ClearBuffers();
+        owner.SetVelocityX(0f);
+        owner.NotifyDied();
     }
 }
