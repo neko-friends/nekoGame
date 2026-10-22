@@ -3,16 +3,17 @@ using UnityEngine;
 
 public enum TeamProgressStage
 {
-    InitialCenter,       // ‡ŠJnF’†‰›
-    HomeEdgeAfterDeath,  // ‰ƒfƒXŒãF’†‰›ƒtƒB[ƒ‹ƒh‚Ì©w‘¤’[
-    GateBefore,           // ƒtƒB[ƒ‹ƒhØ‚è‘Ö‚¦ŒãFŠÖ–å‘O
-    CastleFront           // ŠÖ–å“Ë”jŒãFé‘O
+    InitialCenter,       // è©¦åˆé–‹å§‹æ™‚ï¼šä¸­å¤®
+    HomeEdgeAfterDeath,  // åˆãƒ‡ã‚¹å¾Œï¼šä¸­å¤®é™£åœ°ã®è‡ªé™£å´ç«¯
+    GateBefore,          // é™£åœ°ç§»å‹•å¾Œï¼šé–¢é–€å‰(é–¢é–€çªç ´å‰)
+    CastleFront          // é–¢é–€çªç ´å¾Œï¼šåŸå‰
 }
 
 [Serializable]
 public class TeamProgressRecord
 {
-    [SerializeField] public int currentFieldIndex = 1;
+    // é™£åœ°ç•ªå·ã¯ 0ã€œ8(å·¦ç«¯=0ã€çœŸã‚“ä¸­=4ã€å³ç«¯=8)ã€‚MatchLayout ã‚’å‚ç…§ã€‚
+    [SerializeField] public int currentFieldIndex = MatchLayout.StartFieldIndex;
     [SerializeField]
     public TeamProgressStage stage =
         TeamProgressStage.InitialCenter;
@@ -24,7 +25,7 @@ public class TeamProgressRecord
 
     public void ResetProgress()
     {
-        currentFieldIndex = 1; // 0=¶A1=’†‰›A2=‰E
+        currentFieldIndex = MatchLayout.StartFieldIndex;
         stage = TeamProgressStage.InitialCenter;
         hasDiedOnce = false;
     }
@@ -36,7 +37,7 @@ public class TeamProgressRecord
 
         hasDiedOnce = true;
 
-        // ‚·‚Å‚Éæ‚Ì’iŠK‚Öi‚ñ‚Å‚¢‚½ê‡‚ÍA•œŠˆ’n“_‚ğŒã‘Ş‚³‚¹‚È‚¢B
+        // ã™ã§ã«å…ˆã®æ®µéšã¸é€²ã‚“ã§ã„ãŸå ´åˆã¯ã€å¾©æ´»åœ°ç‚¹ã‚’å¾Œé€€ã•ã›ãªã„ã€‚
         if (stage == TeamProgressStage.InitialCenter)
             stage = TeamProgressStage.HomeEdgeAfterDeath;
 
@@ -45,20 +46,24 @@ public class TeamProgressRecord
 
     public void ChangeField(int fieldIndex)
     {
-        currentFieldIndex = Mathf.Clamp(fieldIndex, 0, 2);
-        stage = TeamProgressStage.GateBefore;
+        currentFieldIndex = MatchLayout.ClampField(fieldIndex);
+
+        // é–¢é–€ã‚’çªç ´æ¸ˆã¿ãªã‚‰åŸå‰ã®ã¾ã¾ã€‚é™£åœ°ãŒ9ã¤ã«ãªã£ãŸã®ã§ã€
+        // çªç ´å¾Œã«æ¬¡ã®é™£åœ°ã¸é€²ã‚“ã ã ã‘ã§ã€Œé–¢é–€å‰ã€ã¸æˆ»ã‚‰ãªã„ã‚ˆã†ã«ã™ã‚‹ã€‚
+        if (stage != TeamProgressStage.CastleFront)
+            stage = TeamProgressStage.GateBefore;
     }
 
     public void BreakGate(int fieldIndex)
     {
-        currentFieldIndex = Mathf.Clamp(fieldIndex, 0, 2);
+        currentFieldIndex = MatchLayout.ClampField(fieldIndex);
         stage = TeamProgressStage.CastleFront;
     }
 }
 
 public class TeamProgressManager : MonoBehaviour
 {
-    [Header("¶‰E‚Ìw‰c‚Ìisó‹µ")]
+    [Header("å·¦å³ã®é™£å–¶ã®é€²è¡ŒçŠ¶æ³")]
     [SerializeField]
     private TeamProgressRecord leftProgress =
         new TeamProgressRecord();
@@ -101,14 +106,34 @@ public class TeamProgressManager : MonoBehaviour
             NotifyChanged(side);
     }
 
+    /// <summary>é™£åœ°ç§»å‹•(æš—è»¢å¾Œã«éš£ã®é™£åœ°ã¸å…¥ã£ãŸ)ã¨ãã«å‘¼ã¶ã€‚newFieldIndexã¯0ã€œ8ã€‚</summary>
     public void NotifyFieldChanged(TeamSide side, int newFieldIndex)
     {
+        if (!MatchLayout.IsValidField(newFieldIndex))
+        {
+            Debug.LogWarning(
+                $"TeamProgressManager: é™£åœ°ç•ªå·ãŒç¯„å›²å¤–ã§ã™({newFieldIndex})ã€‚" +
+                $"0ã€œ{MatchLayout.FieldCount - 1}ã«ä¸¸ã‚ã¾ã™ã€‚", this);
+        }
+
         GetRecord(side).ChangeField(newFieldIndex);
         NotifyChanged(side);
     }
 
+    /// <summary>
+    /// æ•µå´ã®é–¢é–€ã‚’ç ´å£Šã—ãŸã¨ãã«å‘¼ã¶ã€‚fieldIndexã¯é–¢é–€ãŒã‚ã‚‹é™£åœ°
+    /// (å·¦é™£å–¶ãŒå£Šã™é–¢é–€=6ã€å³é™£å–¶ãŒå£Šã™é–¢é–€=2)ã€‚
+    /// </summary>
     public void NotifyGateBroken(TeamSide side, int fieldIndex)
     {
+        int expected = MatchLayout.EnemyGateField(side);
+        if (fieldIndex != expected)
+        {
+            Debug.LogWarning(
+                $"TeamProgressManager: {side}ãŒå£Šã™é–¢é–€ã¯é™£åœ°{expected}ã®ã¯ãšã§ã™ãŒã€" +
+                $"é™£åœ°{fieldIndex}ã§é€šçŸ¥ã•ã‚Œã¾ã—ãŸã€‚", this);
+        }
+
         GetRecord(side).BreakGate(fieldIndex);
         NotifyChanged(side);
     }
@@ -125,26 +150,20 @@ public class TeamProgressManager : MonoBehaviour
     }
 
     /// <summary>
-    /// w‰c‚Ìis“x‚ğ”äŠr‚·‚é‚½‚ß‚Ì“_”‚ğ•Ô‚·B
-    /// ¶w‰c‚Í‰E‚ÖA‰Ew‰c‚Í¶‚Öi‚Ş‚Ù‚Ç“_”‚ª‚‚­‚È‚éB
+    /// é™£å–¶ã®é€²è¡Œåº¦ã‚’æ¯”è¼ƒã™ã‚‹ãŸã‚ã®ç‚¹æ•°ã‚’è¿”ã™ã€‚
+    /// å·¦é™£å–¶ã¯å³ã¸ã€å³é™£å–¶ã¯å·¦ã¸é€²ã‚€ã»ã©ç‚¹æ•°ãŒé«˜ããªã‚‹ã€‚
     /// </summary>
     public int GetProgressScore(TeamSide side)
     {
-        TeamProgressRecord record =
-            side == TeamSide.Left ? leftProgress : rightProgress;
+        TeamProgressRecord record = GetRecord(side);
 
-        // ƒtƒB[ƒ‹ƒh”Ô†‚Í¶=0A’†‰›=1A‰E=2‚ğ‘z’èB
-        // ¶w‰c‚Í”Ô†‚ª‘å‚«‚¢‚Ù‚Ç‘OiA‰Ew‰c‚Í¬‚³‚¢‚Ù‚Ç‘OiB
         int fieldProgress =
-            side == TeamSide.Left
-                ? record.currentFieldIndex
-                : 2 - record.currentFieldIndex;
+            MatchLayout.ForwardProgress(side, record.currentFieldIndex);
 
-        // ƒtƒB[ƒ‹ƒh‚Ìis‚ğ—Dæ‚µAé‘O‚Ü‚Å“’B‚µ‚Ä‚¢‚ê‚Î‰Á“_B
+        // é™£åœ°ã®é€²è¡Œã‚’å„ªå…ˆã—ã€é–¢é–€ã‚’çªç ´æ¸ˆã¿ãªã‚‰åŠ ç‚¹ã€‚
         int stageBonus =
             record.stage == TeamProgressStage.CastleFront ? 1 : 0;
 
         return fieldProgress * 10 + stageBonus;
     }
-
 }

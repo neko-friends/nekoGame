@@ -34,10 +34,14 @@ public class NeutralState : CharacterState
             return;
         }
 
-        // 必殺技(中身は技データの接続後に実装。今は方向の判定だけ確認できる)
+        // 必殺技(方向で技が決まる。データが無いキャラ・技のときは何も起きない)
         if (c.Special.TryConsumePress(buffer))
         {
-            Debug.Log($"必殺技(未実装) 方向: {owner.ReadSpecialDirection()}");
+            if (owner.Special.Begin(owner.ReadSpecialDirection()))
+            {
+                owner.Machine.Change(owner.Special);
+                return;
+            }
         }
 
         // アイテムを拾う / 投げる
@@ -80,6 +84,12 @@ public class AttackState : CharacterState
 
         // 持続フレームの間だけ判定が有効
         owner.AttackHitboxActive = Frames > activeStart && Frames <= activeEnd;
+
+        // 指定フレームに文字と音声(拒否猫: 24フレで「がんばえ」)
+        if (p.attackCueFrame > 0 && Frames == p.attackCueFrame && !string.IsNullOrEmpty(p.attackCueText))
+        {
+            owner.RaiseCue(p.attackCueText);
+        }
 
         // 発生〜持続の間は少し前へ踏み込む
         bool lunging = Frames <= activeEnd;

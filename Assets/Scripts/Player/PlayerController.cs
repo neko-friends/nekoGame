@@ -1,5 +1,5 @@
 using System;
-using System.Xml;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>必殺技の方向入力(キャラの向き基準。「前」は向いている側)。</summary>
@@ -65,6 +65,10 @@ public class CharacterParams
     public float attackKnockbackY = 3f;         // ノックバック(縦)
     public int attackHitstunFrames = 20;        // 相手ののけぞりフレーム数
 
+    [Header("通常攻撃の文字・音声(企画書:拒否猫は24フレで「がんばえ」)")]
+    public string attackCueText = "がんばえ";
+    public int attackCueFrame = 24;             // 0 なら出さない
+
     [Header("のけぞり")]
     public float knockbackDecayPerFrame = 0.92f; // ノックバックの減衰(1フレームごとの倍率)
 }
@@ -99,6 +103,7 @@ public class PlayerController : MonoBehaviour
     public AttackState Attack { get; private set; }
     public GuardState Guard { get; private set; }
     public GuardBreakState GuardBreak { get; private set; }
+    public SkillState Special { get; private set; }
     public HitstunState Hitstun { get; private set; }
     public DeadState Dead { get; private set; }
 
@@ -114,6 +119,25 @@ public class PlayerController : MonoBehaviour
     public int GuardRegenWaitFrames { get; set; }      // ガードをやめてから、回復が始まるまでの残りフレーム
 
     public event Action<PlayerController> Died;
+
+    /// <summary>技の文字・音声を出す合図(SkillCueView が受け取る)。</summary>
+    public event Action<string> SkillCue;
+
+    /// <summary>キャラのID。CharacterData が無いときは拒否猫として扱う。</summary>
+    public string CharacterId =>
+        characterData != null ? characterData.characterID : SkillLibrary.DefaultCharacterId;
+
+    /// <summary>体の当たり(Collider2D)の範囲。必殺技の判定の基準に使う。</summary>
+    public Bounds BodyBounds => bodyCollider.bounds;
+
+    /// <summary>必殺技の判定の範囲(シーンビューで確認する用)。SkillState が毎フレーム更新する。</summary>
+    public readonly List<(Vector2 center, Vector2 size)> ActiveSkillBoxes =
+        new List<(Vector2 center, Vector2 size)>();
+
+    public void RaiseCue(string text)
+    {
+        SkillCue?.Invoke(text);
+    }
 
     // ---- 内部 ----
     private Collider2D bodyCollider;
@@ -153,6 +177,7 @@ public class PlayerController : MonoBehaviour
         Attack = new AttackState(this);
         Guard = new GuardState(this);
         GuardBreak = new GuardBreakState(this);
+        Special = new SkillState(this);
         Hitstun = new HitstunState(this);
         Dead = new DeadState(this);
         Machine.Changed += OnStateChanged;
@@ -486,6 +511,18 @@ public class PlayerController : MonoBehaviour
             hitstunFrames = 20,
             guardDamage = 25f
         });
+    }
+
+    // シーンビューで必殺技の判定を見る(技の最中だけ表示)
+    private void OnDrawGizmos()
+    {
+        if (ActiveSkillBoxes == null) return;
+
+        Gizmos.color = new Color(1f, 0.3f, 0f, 0.4f);
+        foreach (var box in ActiveSkillBoxes)
+        {
+            Gizmos.DrawCube(box.center, box.size);
+        }
     }
 
     private void OnGUI()

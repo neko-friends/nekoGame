@@ -1,30 +1,46 @@
-using NUnit.Framework.Interfaces;
 using System.Collections;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
+
+/// <summary>
+/// PlayerController ã«å®Ÿè£…ã—ã¦ã‚‚ã‚‰ã†å£ã€‚
+/// è­˜åˆ¥ç”»é¢ã§æ±ºã¾ã£ãŸã‚³ãƒ³ãƒˆãƒ­ãƒ¼ãƒ©ãƒ¼ã‚’ã€è©¦åˆé–‹å§‹æ™‚ã«æ¸¡ã™ã€‚
+/// å®Ÿè£…ã—ã¦ã„ãªã‘ã‚Œã°ä½•ã‚‚ã—ãªã„(ä»Šã®å…¥åŠ›æ–¹å¼ã®ã¾ã¾å‹•ã)ã€‚
+/// </summary>
+public interface IMatchInputBinding
+{
+    void BindInput(InputDevice device, string scheme);
+}
 
 public class MatchFlowManager : MonoBehaviour
 {
-    [Header("ƒvƒŒƒCƒ„[")]
+    [Header("ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼")]
     [SerializeField] private PlayerController leftPlayer;
     [SerializeField] private PlayerController rightPlayer;
 
-    [Tooltip("¶‰E‚»‚ê‚¼‚ê‚ÌƒvƒŒƒCƒ„[‚É‘Î‰‚·‚éGameSession‚ÌÈ”Ô†")]
+    [Tooltip("å·¦å³ãã‚Œãã‚Œã®ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼ã«å¯¾å¿œã™ã‚‹GameSessionã®å¸­ç•ªå·(1P=å·¦=ç™½ / 2P=å³=é»’)")]
     [SerializeField, Min(1)] private int leftPlayerNumber = 1;
     [SerializeField, Min(1)] private int rightPlayerNumber = 2;
 
-    [Header("ŠÇ—ƒXƒNƒŠƒvƒg")]
+    [Header("ç®¡ç†ã‚¹ã‚¯ãƒªãƒ—ãƒˆ")]
     [SerializeField] private TeamProgressManager progressManager;
     [SerializeField] private RespawnPointManager respawnPointManager;
+    [SerializeField] private MatchTimer matchTimer;
 
-    [Header("•œŠˆİ’è")]
+    [Header("å¾©æ´»è¨­å®š")]
     [SerializeField, Min(0f)] private float respawnDelaySeconds = 1f;
 
-    [Header("Ÿ”sEƒV[ƒ“‘JˆÚ")]
+    [Header("ã‚¿ã‚¤ãƒ ã‚¢ãƒƒãƒ—æ™‚ã®å‹æ•—(ä¼ç”»æ›¸ã«è¦å®šãªã—ã€‚ä»®)")]
+    [Tooltip("ã‚¿ã‚¤ãƒ ã‚¢ãƒƒãƒ—æ™‚ã«é€²è¡Œåº¦ãŒåŒç‚¹ã ã£ãŸå ´åˆã®å‹è€…")]
+    [SerializeField] private TeamSide tieBreakWinner = TeamSide.Left;
+
+    [Header("å‹æ•—ãƒ»ã‚·ãƒ¼ãƒ³é·ç§»")]
     [SerializeField] private string resultSceneName = "Result";
     [SerializeField, Min(0f)] private float sceneChangeDelaySeconds = 0f;
 
     private bool matchEnded;
+    private bool hasStarted;
     private bool leftRespawnPending;
     private bool rightRespawnPending;
 
@@ -39,6 +55,14 @@ public class MatchFlowManager : MonoBehaviour
         RegisterPlayer(TeamSide.Right, rightPlayer, rightPlayerNumber);
     }
 
+    private void Start()
+    {
+        // å„ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼ã® Awake ãŒæ¸ˆã‚“ã§ã‹ã‚‰ã€è­˜åˆ¥ç”»é¢ã§é¸ã‚“ã ã‚³ãƒ³ãƒˆãƒ­ãƒ¼ãƒ©ãƒ¼ã‚’æ¸¡ã™
+        hasStarted = true;
+        BindSeatInput(leftPlayer, leftPlayerNumber);
+        BindSeatInput(rightPlayer, rightPlayerNumber);
+    }
+
     private void OnDestroy()
     {
         UnsubscribePlayer(leftPlayer);
@@ -46,8 +70,8 @@ public class MatchFlowManager : MonoBehaviour
     }
 
     /// <summary>
-    /// ƒ^ƒCƒ}[I—¹‚Éis“x‚ğ”äŠr‚µ‚ÄŸÒ‚ğŒˆ’è‚·‚éB
-    /// “¯“_‚Ìê‡‚Í¶w‰c‚ÌŸ—˜B
+    /// ã‚¿ã‚¤ãƒãƒ¼çµ‚äº†æ™‚ã«é€²è¡Œåº¦ã‚’æ¯”è¼ƒã—ã¦å‹è€…ã‚’æ±ºå®šã™ã‚‹ã€‚
+    /// åŒç‚¹ã®å ´åˆã¯ tieBreakWinner(åˆæœŸå€¤ã¯å·¦é™£å–¶)ã®å‹åˆ©ã€‚
     /// </summary>
     public void NotifyTimeExpired()
     {
@@ -59,7 +83,7 @@ public class MatchFlowManager : MonoBehaviour
         if (progressManager == null)
         {
             Debug.LogError(
-                "MatchFlowManager: TeamProgressManager‚ªİ’è‚³‚ê‚Ä‚¢‚Ü‚¹‚ñB"
+                "MatchFlowManager: TeamProgressManagerãŒè¨­å®šã•ã‚Œã¦ã„ã¾ã›ã‚“ã€‚"
             );
             return;
         }
@@ -71,21 +95,24 @@ public class MatchFlowManager : MonoBehaviour
             progressManager.GetProgressScore(TeamSide.Right);
 
         Debug.Log(
-            $"ƒ^ƒCƒ€ƒAƒbƒvI ¶w‰c={leftScore} / ‰Ew‰c={rightScore}"
+            $"ã‚¿ã‚¤ãƒ ã‚¢ãƒƒãƒ—ï¼ å·¦é™£å–¶={leftScore} / å³é™£å–¶={rightScore}"
         );
 
-        // “¯“_‚È‚ç¶w‰c‚ªŸ—˜B
-        TeamSide winnerSide =
-            leftScore >= rightScore
-                ? TeamSide.Left
-                : TeamSide.Right;
+        TeamSide winnerSide;
+
+        if (leftScore > rightScore)
+            winnerSide = TeamSide.Left;
+        else if (rightScore > leftScore)
+            winnerSide = TeamSide.Right;
+        else
+            winnerSide = tieBreakWinner;
 
         FinishMatch(winnerSide);
     }
 
     /// <summary>
-    /// ƒvƒŒƒCƒ„[‚ğ“o˜^‚·‚éB
-    /// “®“I‚ÉƒLƒƒƒ‰ƒNƒ^[‚ğ¶¬‚·‚éê‡‚àA¶¬Œã‚ÉŒÄ‚Ño‚¹‚éB
+    /// ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼ã‚’ç™»éŒ²ã™ã‚‹ã€‚
+    /// å‹•çš„ã«ã‚­ãƒ£ãƒ©ã‚¯ã‚¿ãƒ¼ã‚’ç”Ÿæˆã™ã‚‹å ´åˆã‚‚ã€ç”Ÿæˆå¾Œã«å‘¼ã³å‡ºã›ã‚‹ã€‚
     /// </summary>
     public void RegisterPlayer(
         TeamSide side,
@@ -114,12 +141,52 @@ public class MatchFlowManager : MonoBehaviour
 
         player.Died -= OnPlayerDied;
         player.Died += OnPlayerDied;
+
+        // è©¦åˆé–‹å§‹å¾Œã«ç”Ÿæˆã•ã‚ŒãŸã‚­ãƒ£ãƒ©ã¯ã€ã“ã“ã§å¸­ã®ã‚³ãƒ³ãƒˆãƒ­ãƒ¼ãƒ©ãƒ¼ã‚’æ¸¡ã™
+        if (hasStarted)
+            BindSeatInput(player, playerNumber);
     }
 
     private void UnsubscribePlayer(PlayerController player)
     {
         if (player != null)
             player.Died -= OnPlayerDied;
+    }
+
+    // å¸­(GameSession)ã®ã‚³ãƒ³ãƒˆãƒ­ãƒ¼ãƒ©ãƒ¼ã‚’ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼ã¸æ¸¡ã™
+    private void BindSeatInput(PlayerController player, int playerNumber)
+    {
+        if (player == null)
+            return;
+
+        IMatchInputBinding binding = player.GetComponent<IMatchInputBinding>();
+        if (binding == null)
+            return;
+
+        PlayerSessionData seat = GetSeat(playerNumber);
+        if (seat == null || seat.device == null)
+        {
+            Debug.LogWarning(
+                $"MatchFlowManager: P{playerNumber} ã®å¸­ã«ã‚³ãƒ³ãƒˆãƒ­ãƒ¼ãƒ©ãƒ¼æƒ…å ±ãŒã‚ã‚Šã¾ã›ã‚“ã€‚" +
+                "è­˜åˆ¥ç”»é¢ã‚’çµŒç”±ã›ãšã«è©¦åˆã‚·ãƒ¼ãƒ³ã‚’ç›´æ¥å†ç”Ÿã—ã¦ã„ã‚‹å¯èƒ½æ€§ãŒã‚ã‚Šã¾ã™ã€‚",
+                this
+            );
+            return;
+        }
+
+        binding.BindInput(seat.device, seat.schemeName);
+    }
+
+    private static PlayerSessionData GetSeat(int playerNumber)
+    {
+        if (GameSession.Seats == null ||
+            playerNumber < 1 ||
+            playerNumber > GameSession.Seats.Length)
+        {
+            return null;
+        }
+
+        return GameSession.Seats[playerNumber - 1];
     }
 
     private void OnPlayerDied(PlayerController player)
@@ -150,12 +217,12 @@ public class MatchFlowManager : MonoBehaviour
         else
         {
             Debug.LogWarning(
-                "–¢“o˜^‚ÌƒvƒŒƒCƒ„[‚©‚ç€–S’Ê’m‚ğó‚¯æ‚è‚Ü‚µ‚½B"
+                "æœªç™»éŒ²ã®ãƒ—ãƒ¬ã‚¤ãƒ¤ãƒ¼ã‹ã‚‰æ­»äº¡é€šçŸ¥ã‚’å—ã‘å–ã‚Šã¾ã—ãŸã€‚"
             );
             return;
         }
 
-        // ‰ƒfƒX‚Ìis’iŠK‚ğXV‚·‚éB
+        // åˆãƒ‡ã‚¹ã®é€²è¡Œæ®µéšã‚’æ›´æ–°ã™ã‚‹ã€‚
         if (progressManager != null)
             progressManager.NotifyFirstDeath(side);
 
@@ -179,7 +246,7 @@ public class MatchFlowManager : MonoBehaviour
         if (respawnPointManager == null)
         {
             Debug.LogError(
-                "RespawnPointManager‚ª–¢İ’è‚Å‚·B"
+                "RespawnPointManagerãŒæœªè¨­å®šã§ã™ã€‚"
             );
             yield break;
         }
@@ -192,8 +259,8 @@ public class MatchFlowManager : MonoBehaviour
     }
 
     /// <summary>
-    /// ƒtƒB[ƒ‹ƒhØ‚è‘Ö‚¦‚ª¬—§‚µ‚½‚Æ‚«‚ÉŒÄ‚Ño‚·B
-    /// fieldIndex‚Í0=¶A1=’†‰›A2=‰EB
+    /// é™£åœ°ç§»å‹•(æš—è»¢å¾Œã«éš£ã®é™£åœ°ã¸å…¥ã£ãŸ)ã¨ãã«å‘¼ã³å‡ºã™ã€‚
+    /// fieldIndexã¯ 0ã€œ8(å·¦ç«¯=0ã€çœŸã‚“ä¸­=4ã€å³ç«¯=8)ã€‚
     /// </summary>
     public void NotifyFieldChanged(
         TeamSide side,
@@ -206,7 +273,8 @@ public class MatchFlowManager : MonoBehaviour
     }
 
     /// <summary>
-    /// ŠY“–‚·‚éw‰c‚ªŠÖ–å‚ğ“Ë”j‚µ‚½‚Æ‚«‚ÉŒÄ‚Ño‚·B
+    /// è©²å½“ã™ã‚‹é™£å–¶ãŒæ•µå´ã®é–¢é–€ã‚’ç ´å£Šã—ãŸã¨ãã«å‘¼ã³å‡ºã™ã€‚
+    /// fieldIndexã¯é–¢é–€ãŒã‚ã‚‹é™£åœ°(å·¦é™£å–¶ãŒå£Šã™é–¢é–€=6ã€å³é™£å–¶ãŒå£Šã™é–¢é–€=2)ã€‚
     /// </summary>
     public void NotifyGateBroken(
         TeamSide side,
@@ -219,7 +287,7 @@ public class MatchFlowManager : MonoBehaviour
     }
 
     /// <summary>
-    /// é‚Ì”j‰ó‚ª¬—§‚µ‚½‚Æ‚«‚ÉAŸÒ‚Ìw‰c‚ğ“n‚·B
+    /// åŸã®ç ´å£ŠãŒæˆç«‹ã—ãŸã¨ãã«ã€å‹è€…ã®é™£å–¶(=åŸã‚’å£Šã—ãŸå´)ã‚’æ¸¡ã™ã€‚
     /// </summary>
     public void NotifyCastleDestroyed(TeamSide winnerSide)
     {
@@ -235,6 +303,9 @@ public class MatchFlowManager : MonoBehaviour
 
         matchEnded = true;
 
+        if (matchTimer != null)
+            matchTimer.StopTimer();
+
         int winnerPlayerNumber =
             winnerSide == TeamSide.Left
                 ? leftPlayerNumber
@@ -242,13 +313,9 @@ public class MatchFlowManager : MonoBehaviour
 
         string winnerCharacterId = "";
 
-        if (GameSession.Seats != null &&
-            winnerPlayerNumber > 0 &&
-            winnerPlayerNumber <= GameSession.Seats.Length)
-        {
-            winnerCharacterId =
-                GameSession.Seats[winnerPlayerNumber - 1].characterID;
-        }
+        PlayerSessionData winnerSeat = GetSeat(winnerPlayerNumber);
+        if (winnerSeat != null)
+            winnerCharacterId = winnerSeat.characterID;
 
         MatchResultData.SetResult(
             winnerSide,
@@ -265,7 +332,7 @@ public class MatchFlowManager : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(resultSceneName))
         {
-            Debug.LogError("ResultƒV[ƒ“–¼‚ªİ’è‚³‚ê‚Ä‚¢‚Ü‚¹‚ñB");
+            Debug.LogError("Resultã‚·ãƒ¼ãƒ³åãŒè¨­å®šã•ã‚Œã¦ã„ã¾ã›ã‚“ã€‚");
             yield break;
         }
 
