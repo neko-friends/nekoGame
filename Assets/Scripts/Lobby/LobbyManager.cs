@@ -1,12 +1,22 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Controls;
+using UnityEngine.InputSystem.Utilities;
 using UnityEngine.SceneManagement;
-using TMPro;
+using UnityEngine.UI;
 
+/// <summary>
+/// ロビーの進行を管理する。
+/// ・参加は PlayerInputManager を使わず、ここで入力を監視して手動で行う
+/// ・席の情報(GameSession.Seats)を正として、モードは席から導く
+/// ・人数が変わったら準備完了を取り消す
+/// ・開始できるのは1Pのスタートボタンだけ(人間の席が全員準備完了のとき)
+/// </summary>
 public class LobbyManager : MonoBehaviour
 {
-    [Header("対戦設定")]
+    [Header("シーン名")]
     [SerializeField] private string matchSceneName = "MatchScene";
+    [SerializeField] private string titleSceneName = "TitleScene";
 
     [Header("キャラクター一覧")]
     [SerializeField]
@@ -18,145 +28,264 @@ public class LobbyManager : MonoBehaviour
     };
 
     [Header("ロビーUI")]
-    [SerializeField] private TMP_Text player1InfoText;
-    [SerializeField] private TMP_Text player2InfoText;
-    [SerializeField] private TMP_Text playerCountText;
-    [SerializeField] private TMP_Text modeInfoText;
-    [SerializeField] private TMP_Text startInfoText;
+    [SerializeField] private Text player1InfoText;
+    [SerializeField] private Text player2InfoText;
+    [SerializeField] private Text playerCountText;
+    [SerializeField] private Text modeInfoText;
+    [SerializeField] private Text startInfoText;
+    [SerializeField] private Text noticeText;       // 一言通知用(任意)
 
-    private LobbyPlayer player1;
-    private LobbyPlayer player2;
+    [SerializeField] private float noticeSeconds = 2.5f;
 
-    public int PlayerCount { get; private set; }
+    // 席(添字0 = 1P、添字1 = 2P)。空席は null
+    private readonly LobbyPlayer[] seats = new LobbyPlayer[GameSession.SeatCount];
+
+    private System.IDisposable anyButtonSubscription;
+    private float noticeTimer;
+
+    public int PlayerCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (var s in seats) if (s != null) count++;
+            return count;
+        }
+    }
+
+    // トレーニングでは人間は1人だけ(2P席はダミー)
+    private int MaxHumans =>
+        GameSession.Entry == EntryType.Training ? 1 : GameSession.SeatCount;
+
+    // =================================================================
+    // Unity イベント
+    // =================================================================
+
+    private void OnEnable()
+    {
+        // どのコントローラーのボタンが押されても通知を受ける(参加の検知用)
+        anyButtonSubscription = InputSystem.onAnyButtonPress.Call(OnAnyButtonPressed);
+        InputSystem.onDeviceChange += OnDeviceChange;
+    }
+
+    private void OnDisable()
+    {
+        anyButtonSubscription?.Dispose();
+        anyButtonSubscription = null;
+        InputSystem.onDeviceChange -= OnDeviceChange;
+    }
 
     private void Start()
     {
-        UpdatePlayerCount();
+        RestoreSeatsFromSession();
+        JoinPendingFromTitle();
+        RefreshLobbyUI();
     }
 
-    // PlayerInputManagerのPlayer Joined Eventから呼び出す
-    public void OnPlayerJoined(PlayerInput playerInput)
+    private void Update()
     {
-        if (playerInput == null)
-            return;
-
-        LobbyPlayer lobbyPlayer =
-            playerInput.GetComponent<LobbyPlayer>();
-
-        if (lobbyPlayer == null)
+        // 参加者それぞれの入力を読む(途中で席が変わっても安全なように添字で回す)
+        for (int i = 0; i < seats.Length; i++)
         {
-            Debug.LogError(
-                "参加用PrefabにLobbyPlayerがありません。");
-
-            Destroy(playerInput.gameObject);
-            return;
+            seats[i]?.Tick();
         }
 
-        // 参加順に空いているスロットへ割り当てる
-        int playerNumber;
-
-        if (player1 == null)
+        if (noticeTimer > 0f)
         {
-            playerNumber = 1;
-            player1 = lobbyPlayer;
+            noticeTimer -= Time.deltaTime;
+            if (noticeTimer <= 0f && noticeText != null) noticeText.text = "";
         }
-        else if (player2 == null)
-        {
-            playerNumber = 2;
-            player2 = lobbyPlayer;
-        }
-        else
-        {
-            Debug.Log("参加できるのは最大2人です。");
-            Destroy(playerInput.gameObject);
-            return;
-        }
-
-        lobbyPlayer.Initialize(
-            playerNumber,
-            this,
-            playerInput
-        );
-
-        UpdatePlayerCount();
     }
 
-    // PlayerInputManagerのPlayer Left Eventから呼び出す
-    public void OnPlayerLeft(PlayerInput playerInput)
+    // =================================================================
+    // 参加の検知
+    // =================================================================
+
+    private void OnAnyButtonPressed(InputControl control)
     {
-        if (playerInput == null)
-            return;
+        InputDevice device = control.device;
+        string scheme = null;
+        bool isConfirm = false;
+        bool isCancel = false;
 
-        LobbyPlayer leavingPlayer =
-            playerInput.GetComponent<LobbyPlayer>();
-
-        if (leavingPlayer == player1)
-            player1 = null;
-
-        if (leavingPlayer == player2)
-            player2 = null;
-
-        // P1が退出し、P2だけ残った場合はP2をP1に繰り上げる
-        if (player1 == null && player2 != null)
+        if (device is Gamepad pad)
         {
-            player1 = player2;
-            player2 = null;
+            scheme = LobbySchemes.GamepadScheme;
+            isConfirm = control == pad.buttonSouth;   // A
+            isCancel = control == pad.buttonEast;     // B
+        }
+        else if (control is KeyControl key)
+        {
+            var k1 = LobbySchemes.Keyboard1Keys;
+            var k2 = LobbySchemes.Keyboard2Keys;
 
-            player1.Initialize(
-                1,
-                this,
-                player1.PlayerInput
-            );
+            if (key.keyCode == k1.confirm) { scheme = LobbySchemes.Keyboard1Scheme; isConfirm = true; }
+            else if (key.keyCode == k2.confirm) { scheme = LobbySchemes.Keyboard2Scheme; isConfirm = true; }
+            else if (key.keyCode == k1.cancel) { scheme = LobbySchemes.Keyboard1Scheme; isCancel = true; }
+            else if (key.keyCode == k2.cancel) { scheme = LobbySchemes.Keyboard2Scheme; isCancel = true; }
         }
 
-        // 退出後に残ったP2がいれば、P2として再設定する
-        if (player1 != null && player2 != null)
-        {
-            player2.Initialize(
-                2,
-                this,
-                player2.PlayerInput
-            );
-        }
+        if (scheme == null) return;
 
-        UpdatePlayerCount();
+        if (isConfirm)
+        {
+            TryJoin(device, scheme);
+        }
+        else if (isCancel && PlayerCount == 0)
+        {
+            // 誰も参加していない状態でキャンセル → タイトルへ
+            ReturnToTitle();
+        }
     }
 
-    private void UpdatePlayerCount()
+    // =================================================================
+    // 席の管理
+    // =================================================================
+
+    private bool TryJoin(InputDevice device, string scheme)
     {
-        PlayerCount = 0;
+        if (PlayerCount >= MaxHumans) return false;
 
-        if (player1 != null)
-            PlayerCount++;
-
-        if (player2 != null)
-            PlayerCount++;
-
-        GameMode previousMode = GameSession.CurrentMode;
-
-        // 人数に応じてモードを自動変更
-        if (PlayerCount == 1)
+        // 同じコントローラー(同じスキーム)の二重参加は不可
+        foreach (var s in seats)
         {
-            GameSession.CurrentMode = GameMode.Solo;
-        }
-        else
-        {
-            // 0人または2人の場合は初期モードに戻す
-            GameSession.CurrentMode = GameMode.Versus;
+            if (s != null && s.Device == device && s.SchemeName == scheme) return false;
         }
 
-        // モードが変わったら準備状態をリセット
-        if (previousMode != GameSession.CurrentMode)
-        {
-            if (player1 != null)
-                player1.SetReady(false);
+        int index = FirstEmptySeat();
+        if (index < 0) return false;
 
-            if (player2 != null)
-                player2.SetReady(false);
+        seats[index] = new LobbyPlayer(this, device, scheme, index + 1, DefaultCharacterFor(index));
+
+        OnSeatsChanged();
+        return true;
+    }
+
+    public void RequestLeave(LobbyPlayer player)
+    {
+        for (int i = 0; i < seats.Length; i++)
+        {
+            if (seats[i] == player) seats[i] = null;
+        }
+
+        CompactSeats();
+        OnSeatsChanged();
+    }
+
+    // 1Pが抜けたら2Pを1Pへ繰り上げる(開始の権限を持つ人を常に確保するため)
+    private void CompactSeats()
+    {
+        for (int i = 0; i < seats.Length; i++)
+        {
+            if (seats[i] != null) continue;
+
+            for (int j = i + 1; j < seats.Length; j++)
+            {
+                if (seats[j] == null) continue;
+
+                seats[i] = seats[j];
+                seats[j] = null;
+                seats[i].SetPlayerNumber(i + 1);
+                break;
+            }
+        }
+    }
+
+    // 人数が変わったとき: 全員の準備完了を取り消す(キャラ選択は保持)
+    private void OnSeatsChanged()
+    {
+        bool anyReady = false;
+
+        foreach (var s in seats)
+        {
+            if (s == null) continue;
+
+            if (s.IsReady) anyReady = true;
+            s.SetReady(false);
+        }
+
+        if (anyReady)
+        {
+            ShowNotice("人数が変わったため、準備完了を取り消しました");
         }
 
         RefreshLobbyUI();
     }
+
+    private int FirstEmptySeat()
+    {
+        for (int i = 0; i < seats.Length; i++)
+        {
+            if (seats[i] == null) return i;
+        }
+        return -1;
+    }
+
+    private string DefaultCharacterFor(int seatIndex)
+    {
+        if (characterIDs == null || characterIDs.Length == 0) return "Character01";
+        return characterIDs[seatIndex % characterIDs.Length];
+    }
+
+    // コントローラーが抜けたら、その席を空ける
+    private void OnDeviceChange(InputDevice device, InputDeviceChange change)
+    {
+        if (change != InputDeviceChange.Disconnected && change != InputDeviceChange.Removed) return;
+
+        bool removed = false;
+
+        for (int i = 0; i < seats.Length; i++)
+        {
+            if (seats[i] != null && seats[i].Device == device)
+            {
+                seats[i] = null;
+                removed = true;
+            }
+        }
+
+        if (!removed) return;
+
+        CompactSeats();
+        ShowNotice("コントローラーが切断されました");
+        OnSeatsChanged();
+    }
+
+    // =================================================================
+    // 復元(再戦・ロビーへ戻る・タイトルからの引き継ぎ)
+    // =================================================================
+
+    // セッションに残っている人間の席を、同じコントローラーで復元する(準備完了はリセット)
+    private void RestoreSeatsFromSession()
+    {
+        for (int i = 0; i < GameSession.Seats.Length; i++)
+        {
+            PlayerSessionData data = GameSession.Seats[i];
+
+            if (data == null || data.controlType != PlayerControlType.Human) continue;
+            if (data.device == null || !data.device.added) continue;   // 接続されていなければ復元しない
+            if (PlayerCount >= MaxHumans) break;
+
+            seats[i] = new LobbyPlayer(this, data.device, data.schemeName, i + 1, data.characterID);
+        }
+
+        CompactSeats();
+    }
+
+    // タイトルで決定を押したコントローラーを、1Pとして自動で参加させる
+    private void JoinPendingFromTitle()
+    {
+        if (GameSession.PendingJoinDevice != null && PlayerCount == 0)
+        {
+            TryJoin(GameSession.PendingJoinDevice, GameSession.PendingJoinScheme);
+        }
+
+        GameSession.PendingJoinDevice = null;
+        GameSession.PendingJoinScheme = null;
+    }
+
+    // =================================================================
+    // キャラ選択(LobbyPlayer から呼ばれる)
+    // =================================================================
 
     public string GetNextCharacter(string currentID)
     {
@@ -168,109 +297,159 @@ public class LobbyManager : MonoBehaviour
         return GetCharacterByOffset(currentID, -1);
     }
 
-    private string GetCharacterByOffset(
-        string currentID,
-        int offset)
+    private string GetCharacterByOffset(string currentID, int offset)
     {
-        if (characterIDs == null || characterIDs.Length == 0)
-            return currentID;
+        if (characterIDs == null || characterIDs.Length == 0) return currentID;
 
-        int index = System.Array.IndexOf(
-            characterIDs, currentID);
+        int index = System.Array.IndexOf(characterIDs, currentID);
+        if (index < 0) index = 0;
 
-        if (index < 0)
-            index = 0;
-
-        int nextIndex =
-            (index + offset + characterIDs.Length)
-            % characterIDs.Length;
-
-        return characterIDs[nextIndex];
+        int next = (index + offset + characterIDs.Length) % characterIDs.Length;
+        return characterIDs[next];
     }
 
-    // P1が開始操作をしたときに呼び出す
-    public void RequestStart()
+    // =================================================================
+    // 開始 / 遷移
+    // =================================================================
+
+    // 人間の席が1人以上いて、全員が準備完了
+    private bool CanStart()
     {
-        if (player1 == null || !player1.IsReady)
+        if (PlayerCount == 0) return false;
+
+        foreach (var s in seats)
         {
-            Debug.Log("P1の準備完了が必要です。");
+            if (s != null && !s.IsReady) return false;
+        }
+        return true;
+    }
+
+    // 開始できるのは1Pだけ
+    public void RequestStart(LobbyPlayer requester)
+    {
+        if (requester.PlayerNumber != 1) return;
+
+        if (!CanStart())
+        {
+            ShowNotice("全員の準備完了が必要です");
             return;
         }
 
-        if (GameSession.CurrentMode == GameMode.Versus)
+        WriteSession();
+        SceneManager.LoadScene(matchSceneName);
+    }
+
+    // 席の情報を GameSession に書き込む(空席は CPU またはダミーで埋める)
+    private void WriteSession()
+    {
+        for (int i = 0; i < GameSession.Seats.Length; i++)
         {
-            if (player2 == null || !player2.IsReady)
+            if (seats[i] != null)
             {
-                Debug.Log("P2の準備完了が必要です。");
-                return;
+                GameSession.Seats[i] = seats[i].CreateSessionData();
+            }
+            else if (GameSession.Entry == EntryType.Training)
+            {
+                GameSession.Seats[i] = new PlayerSessionData
+                {
+                    playerNumber = i + 1,
+                    controlType = PlayerControlType.Dummy,
+                    characterID = GameSession.DefaultDummyCharacterID
+                };
+            }
+            else
+            {
+                GameSession.Seats[i] = new PlayerSessionData
+                {
+                    playerNumber = i + 1,
+                    controlType = PlayerControlType.CPU,
+                    characterID = GameSession.DefaultCpuCharacterID
+                };
             }
         }
+    }
 
-        GameSession.Player1 =
-            player1.CreateSessionData(PlayerControlType.Human);
+    private void ReturnToTitle()
+    {
+        GameSession.ResetSession();
+        SceneManager.LoadScene(titleSceneName);
+    }
 
-        if (GameSession.CurrentMode == GameMode.Solo)
-        {
-            GameSession.Player2 = new PlayerSessionData
-            {
-                playerNumber = 2,
-                controlType = PlayerControlType.CPU,
-                characterID = "Character02"
-            };
-        }
-        else
-        {
-            GameSession.Player2 =
-                player2.CreateSessionData(PlayerControlType.Human);
-        }
+    // =================================================================
+    // 表示
+    // =================================================================
 
-        SceneManager.LoadScene(matchSceneName);
+    private void ShowNotice(string message)
+    {
+        if (noticeText == null) return;
+
+        noticeText.text = message;
+        noticeTimer = noticeSeconds;
     }
 
     public void RefreshLobbyUI()
     {
-        if (player1InfoText != null)
-        {
-            player1InfoText.text = player1 == null
-                ? "P1：未参加"
-                : $"P1：{player1.SelectedCharacterID}\n" +
-                  (player1.IsReady ? "準備完了" : "選択中");
-        }
-
-        if (player2InfoText != null)
-        {
-            player2InfoText.text =
-                GameSession.CurrentMode == GameMode.Solo
-                ? "P2：CPU"
-                : player2 == null
-                    ? "P2：未参加"
-                    : $"P2：{player2.SelectedCharacterID}\n" +
-                      (player2.IsReady ? "準備完了" : "選択中");
-        }
+        if (player1InfoText != null) player1InfoText.text = SeatText(0);
+        if (player2InfoText != null) player2InfoText.text = SeatText(1);
 
         if (playerCountText != null)
         {
-            playerCountText.text =
-                $"参加人数：{PlayerCount}人";
+            playerCountText.text = $"参加人数：{PlayerCount}人";
         }
 
         if (modeInfoText != null)
         {
-            modeInfoText.text =
-                $"モード：{GameSession.CurrentMode}";
+            modeInfoText.text = PlayerCount == 0
+                ? "モード：待機中"
+                : $"モード：{ModeLabel(GameSession.DetermineMode(GameSession.Entry, PlayerCount))}";
         }
 
         if (startInfoText != null)
         {
-            bool canStart =
-                player1 != null &&
-                player1.IsReady &&
-                (GameSession.CurrentMode == GameMode.Solo ||
-                 (player2 != null && player2.IsReady));
-
-            startInfoText.text = canStart
-                ? "開始できます"
-                : "プレイヤーの準備を待っています";
+            if (PlayerCount == 0) startInfoText.text = "ボタンを押して参加してください";
+            else if (CanStart()) startInfoText.text = "1P：スタートボタンで開始";
+            else startInfoText.text = "プレイヤーの準備を待っています";
         }
     }
+
+    private string SeatText(int index)
+    {
+        LobbyPlayer p = seats[index];
+
+        if (p != null)
+        {
+            return $"P{index + 1}：{p.SelectedCharacterID}\n" +
+                   (p.IsReady ? "準備完了" : "選択中") +
+                   $"\n({p.SchemeName})";
+        }
+
+        if (index == 0) return "P1：ボタンで参加";
+
+        if (GameSession.Entry == EntryType.Training) return "P2：ダミー";
+
+        return $"P2：CPU({GameSession.DefaultCpuCharacterID})\nボタンで参加";
+    }
+
+    private static string ModeLabel(GameMode mode)
+    {
+        switch (mode)
+        {
+            case GameMode.Versus: return "対戦";
+            case GameMode.Solo: return "一人用";
+            case GameMode.Training: return "トレーニング";
+            default: return mode.ToString();
+        }
+    }
+
+    // =================================================================
+    // デバッグ用(コントローラーが無い環境で、UIのボタンから操作する場合)
+    // =================================================================
+
+    public void P1NextCharacter() => seats[0]?.SelectNextCharacter();
+    public void P1PreviousCharacter() => seats[0]?.SelectPreviousCharacter();
+    public void P1ToggleReady() => seats[0]?.ToggleReady();
+
+    public void P2NextCharacter() => seats[1]?.SelectNextCharacter();
+    public void P2PreviousCharacter() => seats[1]?.SelectPreviousCharacter();
+    public void P2ToggleReady() => seats[1]?.ToggleReady();
 }

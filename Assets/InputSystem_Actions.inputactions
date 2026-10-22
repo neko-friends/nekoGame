@@ -874,6 +874,34 @@
                     "isPartOfComposite": false
                 }
             ]
+        },
+        {
+            "name": "Lobby",
+            "id": "0886a3fa-8b50-4f61-ac91-af2648921dd1",
+            "actions": [
+                {
+                    "name": "New action",
+                    "type": "Button",
+                    "id": "a649a714-ac77-4b8b-b145-ff1bee5010a4",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "07249ccc-1517-4e06-a6df-8fd24979c391",
+                    "path": "",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "New action",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
         }
     ],
     "controlSchemes": [
