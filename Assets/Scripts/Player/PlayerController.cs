@@ -1,4 +1,5 @@
 using System;
+using System.Xml;
 using UnityEngine;
 
 /// <summary>必殺技の方向入力(キャラの向き基準。「前」は向いている側)。</summary>
@@ -14,14 +15,17 @@ public struct HitInfo
 }
 
 /// <summary>
-/// キャラごとの数値。後でスプレッドシートのデータから流し込む想定の入れ物。
-/// (将来は ScriptableObject に差し替えやすいよう、数値だけをここに集めている)
+/// キャラごとの数値。スプレッドシート(CSV)から CharacterData に流し込む入れ物。
+/// 項目名はCSVの列見出しと一致させる(エディタの取り込みが項目名で対応づける)。
+/// ※ 既存の項目名は変更していない。企画書に合わせて既定値だけ更新し、項目を追加した。
 /// </summary>
 [Serializable]
 public class CharacterParams
 {
     [Header("基本")]
     public float maxHp = 100f;
+    [Tooltip("【仮値】企画書に数値の記載なし。ダメージ = atk × 技補正値(次のステップで使用)")]
+    public float atk = 100f;
     public float moveSpeed = 5f;
     public float jumpSpeed = 8f;
     public int maxJumps = 2;               // 2段ジャンプ = 2
@@ -31,20 +35,35 @@ public class CharacterParams
     public float throwSpeed = 10f;
     public float throwSpawnOffset = 0.5f;
 
-    [Header("ガード")]
-    public float guardMax = 100f;
-    public float guardDrainPerSecond = 10f;     // 押しているだけで減る量
-    public float guardRegenPerSecond = 15f;     // ガードしていない間の回復量
-    public float guardPushback = 3f;            // 被弾時の押し戻し速度
-    public float guardPushbackDecay = 0.8f;     // 押し戻しの減衰(1フレームごとの倍率)
-    public float guardBreakStunSeconds = 2f;    // 崩壊時のスタン時間
-    public float guardAfterBreakRatio = 0.5f;   // 崩壊から復帰したときの耐久値の割合
+    [Header("ガード(企画書の値)")]
+    public float guardMax = 1000f;
+    public float guardDrainDelaySeconds = 0.5f;          // ガード開始からこの時間後に自然消費が始まる
+    public float guardDrainPerSecond = 250f;             // 自然消費の速度
+    public float guardDrainPauseAfterHitSeconds = 0.5f;  // 被弾で耐久値が減ったあと、自然消費を止める時間
+    public float guardRegenDelaySeconds = 3f;            // ガードをやめてから回復が始まるまで
+    public float guardRegenPerSecond = 25f;              // 回復の速度
+    public float guardPushback = 3f;                     // 被弾時の押し戻し速度
+    public float guardPushbackDecay = 0.8f;              // 押し戻しの減衰(1フレームごとの倍率)
+    public float guardBreakStunSeconds = 2f;             // 崩壊時のスタン時間
+    public float guardAfterBreakRatio = 1f;              // 崩壊から復帰したときの耐久値の割合(1 = 全回復)
+
+    [Header("技補正値(企画書:拒否猫の値)")]
+    public float normalAttackMultiplier = 0.5f;
+    public float neutralSpecialMultiplier = 1.2f;
+    public float sideSpecialMultiplier = 0.75f;
+    public float upSpecialMultiplier = 1.5f;
+    public float downSpecialMultiplier = 1f;
 
     [Header("通常攻撃(フレーム)")]
     public int attackStartupFrames = 6;
     public int attackActiveFrames = 4;
     public int attackRecoveryFrames = 14;
     public float attackLungeSpeed = 2f;         // 踏み込み速度
+
+    [Header("通常攻撃の当たり(【仮値】企画書に記載なし。調整してよい)")]
+    public float attackKnockbackX = 4f;         // ノックバック(横。向いている側へ飛ばす)
+    public float attackKnockbackY = 3f;         // ノックバック(縦)
+    public int attackHitstunFrames = 20;        // 相手ののけぞりフレーム数
 
     [Header("のけぞり")]
     public float knockbackDecayPerFrame = 0.92f; // ノックバックの減衰(1フレームごとの倍率)
@@ -61,6 +80,8 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private PlayerInputReceiver inputReceiver;
 
     [Header("キャラの数値")]
+    [Tooltip("設定すると、この数値(スプレッドシートから取り込んだもの)を使う。未設定なら下の Parameters を使う")]
+    [SerializeField] private CharacterData characterData;
     [SerializeField] private CharacterParams parameters = new CharacterParams();
 
     [Header("デバッグ")]
@@ -88,6 +109,10 @@ public class PlayerController : MonoBehaviour
     public float GuardDurability { get; set; }
     public bool AttackHitboxActive { get; set; }       // 攻撃の判定が有効なフレームか
 
+    // ガードの待ち時間(フレーム)。GuardState が設定し、FixedUpdate で減らす
+    public int GuardDrainHoldFrames { get; set; }      // 被弾後、自然消費を止める残りフレーム
+    public int GuardRegenWaitFrames { get; set; }      // ガードをやめてから、回復が始まるまでの残りフレーム
+
     public event Action<PlayerController> Died;
 
     // ---- 内部 ----
@@ -114,6 +139,12 @@ public class PlayerController : MonoBehaviour
         if (inputReceiver == null)
         {
             inputReceiver = GetComponent<PlayerInputReceiver>();
+        }
+
+        // CharacterData が設定されていれば、その数値を使う(初期値を使う前に適用する)
+        if (characterData != null)
+        {
+            ApplyCharacterData(characterData);
         }
 
         // 状態の生成
@@ -194,6 +225,22 @@ public class PlayerController : MonoBehaviour
         {
             nearbyItem = null;
         }
+    }
+
+    // =================================================================
+    // キャラデータの適用
+    // =================================================================
+
+    /// <summary>
+    /// CharacterData の数値をコピーして使う(元のアセットを書き換えないため複製する)。
+    /// 試合シーンで GameSession の characterID から選んだデータを渡す場合にも使える。
+    /// </summary>
+    public void ApplyCharacterData(CharacterData data)
+    {
+        if (data == null) return;
+
+        characterData = data;
+        parameters = JsonUtility.FromJson<CharacterParams>(JsonUtility.ToJson(data.parameters));
     }
 
     // =================================================================
@@ -305,6 +352,8 @@ public class PlayerController : MonoBehaviour
     {
         Hp = parameters.maxHp;
         GuardDurability = parameters.guardMax;
+        GuardDrainHoldFrames = 0;
+        GuardRegenWaitFrames = 0;
         JumpsLeft = parameters.maxJumps;
         AttackHitboxActive = false;
 
@@ -361,8 +410,18 @@ public class PlayerController : MonoBehaviour
 
     private void RegenerateGuard()
     {
+        // 被弾後の「自然消費ストップ」の残り時間は、状態に関係なく進める
+        if (GuardDrainHoldFrames > 0) GuardDrainHoldFrames--;
+
         CharacterState s = Machine.Current;
         if (s == Guard || s == GuardBreak || s == Dead) return;
+
+        // ガードをやめてから一定時間は回復しない(企画書:3秒後から回復)
+        if (GuardRegenWaitFrames > 0)
+        {
+            GuardRegenWaitFrames--;
+            return;
+        }
 
         GuardDurability = Mathf.Min(
             parameters.guardMax,

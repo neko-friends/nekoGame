@@ -1,0 +1,6 @@
+ID,名前(出力しない),名前ID,ATK,最大HP,DEX
+id,,nameid,atk,maxHp,dex
+unit0001,拒否猫,name_unit0001,50,1500,5
+unit0002,とけちゃぁ猫,name_unit0002,25,500,10
+unit0003,労働猫,name_unit0003,75,1000,2
+unit0004,潰すパリピ猫,name_unit0004,100,2500,10

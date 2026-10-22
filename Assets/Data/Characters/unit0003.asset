@@ -1,0 +1,36 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ae202aa1e63543a4fa178e4dfb85d1e9, type: 3}
+  m_Name: unit0003
+  m_EditorClassIdentifier: Assembly-CSharp::CharacterData
+  characterID: unit0003
+  displayName: 
+  parameters:
+    maxHp: 100
+    moveSpeed: 2
+    jumpSpeed: 8
+    maxJumps: 2
+    inputBufferFrames: 6
+    throwSpeed: 10
+    throwSpawnOffset: 0.5
+    guardMax: 100
+    guardDrainPerSecond: 10
+    guardRegenPerSecond: 15
+    guardPushback: 3
+    guardPushbackDecay: 0.8
+    guardBreakStunSeconds: 2
+    guardAfterBreakRatio: 0.5
+    attackStartupFrames: 6
+    attackActiveFrames: 4
+    attackRecoveryFrames: 14
+    attackLungeSpeed: 2
+    knockbackDecayPerFrame: 0.92
