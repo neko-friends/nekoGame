@@ -1,341 +1,240 @@
 using System.Collections;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 
-/// <summary>
-/// PlayerController に実装してもらう口。
-/// 識別画面で決まったコントローラーを、試合開始時に渡す。
-/// 実装していなければ何もしない(今の入力方式のまま動く)。
-/// </summary>
-public interface IMatchInputBinding
-{
-    void BindInput(InputDevice device, string scheme);
-}
-
+/// <summary>仮戦闘シーンの試合進行と勝敗確定をまとめる。</summary>
 public class MatchFlowManager : MonoBehaviour
 {
     [Header("プレイヤー")]
     [SerializeField] private PlayerController leftPlayer;
     [SerializeField] private PlayerController rightPlayer;
-
-    [Tooltip("左右それぞれのプレイヤーに対応するGameSessionの席番号(1P=左=白 / 2P=右=黒)")]
+    [Tooltip("GameSessionの席番号。左=1P、右=2P")]
     [SerializeField, Min(1)] private int leftPlayerNumber = 1;
     [SerializeField, Min(1)] private int rightPlayerNumber = 2;
 
     [Header("管理スクリプト")]
     [SerializeField] private TeamProgressManager progressManager;
     [SerializeField] private RespawnPointManager respawnPointManager;
-    [SerializeField] private MatchTimer matchTimer;
+    [SerializeField] private KillCountManager killCountManager;
+    [SerializeField] private PlayerDeathRespawnManager deathRespawnManager;
+    [SerializeField] private GameTimer gameTimer;
 
-    [Header("復活設定")]
-    [SerializeField, Min(0f)] private float respawnDelaySeconds = 1f;
+    [Header("試合開始")]
+    [SerializeField] private bool placePlayersAtStart = true;
 
-    [Header("タイムアップ時の勝敗(企画書に規定なし。仮)")]
-    [Tooltip("タイムアップ時に進行度が同点だった場合の勝者")]
+    [Header("タイムアップ時の同点判定")]
     [SerializeField] private TeamSide tieBreakWinner = TeamSide.Left;
 
     [Header("勝敗・シーン遷移")]
     [SerializeField] private string resultSceneName = "Result";
     [SerializeField, Min(0f)] private float sceneChangeDelaySeconds = 0f;
 
+    public bool HasAnyDeathOccurred { get; private set; }
+    public bool MatchEnded => matchEnded;
+
     private bool matchEnded;
-    private bool hasStarted;
-    private bool leftRespawnPending;
-    private bool rightRespawnPending;
+    private bool leftAlive = true;
+    private bool rightAlive = true;
+    private bool hasPendingCastleResult;
+    private TeamSide pendingCastleWinner;
+    private bool timeExpiredPending;
+    private Coroutine resolveRoutine;
 
     private void Awake()
     {
         MatchResultData.Reset();
-
-        if (progressManager != null)
-            progressManager.ResetProgress();
-
+        if (progressManager != null) progressManager.ResetProgress();
+        if (killCountManager != null) killCountManager.ResetCounts();
         RegisterPlayer(TeamSide.Left, leftPlayer, leftPlayerNumber);
         RegisterPlayer(TeamSide.Right, rightPlayer, rightPlayerNumber);
+        if (deathRespawnManager != null)
+        {
+            deathRespawnManager.Respawned -= OnPlayerRespawned;
+            deathRespawnManager.Respawned += OnPlayerRespawned;
+        }
     }
 
     private void Start()
     {
-        // 各プレイヤーの Awake が済んでから、識別画面で選んだコントローラーを渡す
-        hasStarted = true;
-        BindSeatInput(leftPlayer, leftPlayerNumber);
-        BindSeatInput(rightPlayer, rightPlayerNumber);
+        if (!placePlayersAtStart || respawnPointManager == null) return;
+        PlaceAtStart(TeamSide.Left, leftPlayer);
+        PlaceAtStart(TeamSide.Right, rightPlayer);
     }
 
     private void OnDestroy()
     {
-        UnsubscribePlayer(leftPlayer);
-        UnsubscribePlayer(rightPlayer);
+        if (leftPlayer != null) leftPlayer.Died -= OnPlayerDied;
+        if (rightPlayer != null) rightPlayer.Died -= OnPlayerDied;
+        if (deathRespawnManager != null) deathRespawnManager.Respawned -= OnPlayerRespawned;
     }
 
-    /// <summary>
-    /// タイマー終了時に進行度を比較して勝者を決定する。
-    /// 同点の場合は tieBreakWinner(初期値は左陣営)の勝利。
-    /// </summary>
-    public void NotifyTimeExpired()
+    private void PlaceAtStart(TeamSide side, PlayerController player)
     {
-        if (matchEnded)
+        if (player == null) return;
+        if (respawnPointManager.TryGetStartPosition(side, out Vector2 position))
         {
-            return;
+            player.transform.position = position;
+            if (player.Body != null)
+            {
+                player.Body.position = position;
+                player.Body.linearVelocity = Vector2.zero;
+            }
         }
-
-        if (progressManager == null)
-        {
-            Debug.LogError(
-                "MatchFlowManager: TeamProgressManagerが設定されていません。"
-            );
-            return;
-        }
-
-        int leftScore =
-            progressManager.GetProgressScore(TeamSide.Left);
-
-        int rightScore =
-            progressManager.GetProgressScore(TeamSide.Right);
-
-        Debug.Log(
-            $"タイムアップ！ 左陣営={leftScore} / 右陣営={rightScore}"
-        );
-
-        TeamSide winnerSide;
-
-        if (leftScore > rightScore)
-            winnerSide = TeamSide.Left;
-        else if (rightScore > leftScore)
-            winnerSide = TeamSide.Right;
-        else
-            winnerSide = tieBreakWinner;
-
-        FinishMatch(winnerSide);
     }
 
-    /// <summary>
-    /// プレイヤーを登録する。
-    /// 動的にキャラクターを生成する場合も、生成後に呼び出せる。
-    /// </summary>
-    public void RegisterPlayer(
-        TeamSide side,
-        PlayerController player,
-        int playerNumber)
+    public void RegisterPlayer(TeamSide side, PlayerController player, int playerNumber)
     {
-        if (player == null)
-            return;
-
+        if (player == null) return;
         if (side == TeamSide.Left)
         {
-            if (leftPlayer != player)
-                UnsubscribePlayer(leftPlayer);
-
+            if (leftPlayer != null && leftPlayer != player) leftPlayer.Died -= OnPlayerDied;
             leftPlayer = player;
             leftPlayerNumber = playerNumber;
+            leftAlive = true;
         }
         else
         {
-            if (rightPlayer != player)
-                UnsubscribePlayer(rightPlayer);
-
+            if (rightPlayer != null && rightPlayer != player) rightPlayer.Died -= OnPlayerDied;
             rightPlayer = player;
             rightPlayerNumber = playerNumber;
+            rightAlive = true;
         }
-
         player.Died -= OnPlayerDied;
         player.Died += OnPlayerDied;
-
-        // 試合開始後に生成されたキャラは、ここで席のコントローラーを渡す
-        if (hasStarted)
-            BindSeatInput(player, playerNumber);
+        if (deathRespawnManager != null) deathRespawnManager.RegisterPlayer(side, player);
     }
 
-    private void UnsubscribePlayer(PlayerController player)
-    {
-        if (player != null)
-            player.Died -= OnPlayerDied;
-    }
-
-    // 席(GameSession)のコントローラーをプレイヤーへ渡す
-    private void BindSeatInput(PlayerController player, int playerNumber)
-    {
-        if (player == null)
-            return;
-
-        IMatchInputBinding binding = player.GetComponent<IMatchInputBinding>();
-        if (binding == null)
-            return;
-
-        PlayerSessionData seat = GetSeat(playerNumber);
-        if (seat == null || seat.device == null)
-        {
-            Debug.LogWarning(
-                $"MatchFlowManager: P{playerNumber} の席にコントローラー情報がありません。" +
-                "識別画面を経由せずに試合シーンを直接再生している可能性があります。",
-                this
-            );
-            return;
-        }
-
-        binding.BindInput(seat.device, seat.schemeName);
-    }
-
-    private static PlayerSessionData GetSeat(int playerNumber)
-    {
-        if (GameSession.Seats == null ||
-            playerNumber < 1 ||
-            playerNumber > GameSession.Seats.Length)
-        {
-            return null;
-        }
-
-        return GameSession.Seats[playerNumber - 1];
-    }
+    public PlayerController GetPlayer(TeamSide side) => side == TeamSide.Left ? leftPlayer : rightPlayer;
+    public bool IsAlive(TeamSide side) => side == TeamSide.Left ? leftAlive : rightAlive;
 
     private void OnPlayerDied(PlayerController player)
     {
-        if (matchEnded || player == null)
-            return;
-
-        TeamSide side;
-
-        if (player == leftPlayer)
-        {
-            side = TeamSide.Left;
-
-            if (leftRespawnPending)
-                return;
-
-            leftRespawnPending = true;
-        }
-        else if (player == rightPlayer)
-        {
-            side = TeamSide.Right;
-
-            if (rightRespawnPending)
-                return;
-
-            rightRespawnPending = true;
-        }
+        if (matchEnded || player == null) return;
+        TeamSide deadSide;
+        if (player == leftPlayer) deadSide = TeamSide.Left;
+        else if (player == rightPlayer) deadSide = TeamSide.Right;
         else
         {
-            Debug.LogWarning(
-                "未登録のプレイヤーから死亡通知を受け取りました。"
-            );
+            Debug.LogWarning("MatchFlowManager：登録されていないプレイヤーから死亡通知を受け取りました。", this);
             return;
         }
+        if (!IsAlive(deadSide)) return;
 
-        // 初デスの進行段階を更新する。
-        if (progressManager != null)
-            progressManager.NotifyFirstDeath(side);
-
-        StartCoroutine(RespawnAfterDelay(side, player));
+        SetAlive(deadSide, false);
+        HasAnyDeathOccurred = true;
+        TeamSide killerSide = Opposite(deadSide);
+        if (killCountManager != null) killCountManager.AddKillFor(killerSide);
+        if (deathRespawnManager != null) deathRespawnManager.BeginDeathSequence(deadSide, player);
+        else Debug.LogError("MatchFlowManager：PlayerDeathRespawnManagerが未設定です。", this);
     }
 
-    private IEnumerator RespawnAfterDelay(
-        TeamSide side,
-        PlayerController player)
+    private void OnPlayerRespawned(TeamSide side)
     {
-        yield return new WaitForSeconds(respawnDelaySeconds);
-
-        if (side == TeamSide.Left)
-            leftRespawnPending = false;
-        else
-            rightRespawnPending = false;
-
-        if (matchEnded || player == null)
-            yield break;
-
-        if (respawnPointManager == null)
-        {
-            Debug.LogError(
-                "RespawnPointManagerが未設定です。"
-            );
-            yield break;
-        }
-
-        if (respawnPointManager.TryGetSpawnPosition(
-            side, out Vector2 spawnPosition))
-        {
-            player.Revive(spawnPosition);
-        }
+        if (matchEnded) return;
+        SetAlive(side, true);
     }
 
-    /// <summary>
-    /// 陣地移動(暗転後に隣の陣地へ入った)ときに呼び出す。
-    /// fieldIndexは 0〜8(左端=0、真ん中=4、右端=8)。
-    /// </summary>
-    public void NotifyFieldChanged(
-        TeamSide side,
-        int fieldIndex)
+    private void SetAlive(TeamSide side, bool value)
     {
-        if (matchEnded || progressManager == null)
-            return;
-
-        progressManager.NotifyFieldChanged(side, fieldIndex);
+        if (side == TeamSide.Left) leftAlive = value;
+        else rightAlive = value;
     }
 
-    /// <summary>
-    /// 該当する陣営が敵側の関門を破壊したときに呼び出す。
-    /// fieldIndexは関門がある陣地(左陣営が壊す関門=6、右陣営が壊す関門=2)。
-    /// </summary>
-    public void NotifyGateBroken(
-        TeamSide side,
-        int fieldIndex)
+    public void NotifyTimeExpired()
     {
-        if (matchEnded || progressManager == null)
-            return;
-
-        progressManager.NotifyGateBroken(side, fieldIndex);
+        if (matchEnded) return;
+        timeExpiredPending = true;
+        ScheduleResolution();
     }
 
-    /// <summary>
-    /// 城の破壊が成立したときに、勝者の陣営(=城を壊した側)を渡す。
-    /// </summary>
     public void NotifyCastleDestroyed(TeamSide winnerSide)
     {
-        FinishMatch(winnerSide);
+        if (matchEnded) return;
+        if (!hasPendingCastleResult)
+        {
+            hasPendingCastleResult = true;
+            pendingCastleWinner = winnerSide;
+        }
+        ScheduleResolution();
+    }
+
+    private void ScheduleResolution()
+    {
+        if (resolveRoutine == null) resolveRoutine = StartCoroutine(ResolveAtEndOfFrame());
+    }
+
+    private IEnumerator ResolveAtEndOfFrame()
+    {
+        yield return new WaitForEndOfFrame();
+        resolveRoutine = null;
+        if (matchEnded) yield break;
+
+        if (hasPendingCastleResult)
+        {
+            FinishMatch(pendingCastleWinner);
+            yield break;
+        }
+        if (timeExpiredPending)
+        {
+            int leftKills = killCountManager != null ? killCountManager.GetKills(TeamSide.Left) : 0;
+            int rightKills = killCountManager != null ? killCountManager.GetKills(TeamSide.Right) : 0;
+            TeamSide winner = leftKills > rightKills ? TeamSide.Left
+                : rightKills > leftKills ? TeamSide.Right
+                : tieBreakWinner;
+            Debug.Log($"タイムアップ！ キル数：左={leftKills} / 右={rightKills}。勝者={winner}", this);
+            FinishMatch(winner);
+        }
     }
 
     private void FinishMatch(TeamSide winnerSide)
     {
-        if (matchEnded)
-        {
-            return;
-        }
-
+        if (matchEnded) return;
         matchEnded = true;
+        if (gameTimer != null) gameTimer.StopTimer();
+        if (deathRespawnManager != null) deathRespawnManager.CancelAll();
+        if (killCountManager != null) killCountManager.Lock();
 
-        if (matchTimer != null)
-            matchTimer.StopTimer();
-
-        int winnerPlayerNumber =
-            winnerSide == TeamSide.Left
-                ? leftPlayerNumber
-                : rightPlayerNumber;
-
-        string winnerCharacterId = "";
-
+        int winnerPlayerNumber = winnerSide == TeamSide.Left ? leftPlayerNumber : rightPlayerNumber;
+        string winnerCharacterId = string.Empty;
         PlayerSessionData winnerSeat = GetSeat(winnerPlayerNumber);
-        if (winnerSeat != null)
+        if (winnerSeat != null && !string.IsNullOrEmpty(winnerSeat.characterID))
             winnerCharacterId = winnerSeat.characterID;
+        else if (GetPlayer(winnerSide) != null)
+            winnerCharacterId = GetPlayer(winnerSide).CharacterId;
 
-        MatchResultData.SetResult(
-            winnerSide,
-            winnerPlayerNumber,
-            winnerCharacterId
-        );
-
+        MatchResultData.SetResult(winnerSide, winnerPlayerNumber, winnerCharacterId);
         StartCoroutine(LoadResultScene());
     }
 
     private IEnumerator LoadResultScene()
     {
-        yield return new WaitForSeconds(sceneChangeDelaySeconds);
-
+        if (sceneChangeDelaySeconds > 0f) yield return new WaitForSeconds(sceneChangeDelaySeconds);
         if (string.IsNullOrWhiteSpace(resultSceneName))
         {
-            Debug.LogError("Resultシーン名が設定されていません。");
+            Debug.LogError("MatchFlowManager：Resultシーン名が設定されていません。", this);
             yield break;
         }
-
         SceneManager.LoadScene(resultSceneName);
+    }
+
+    private static PlayerSessionData GetSeat(int playerNumber)
+    {
+        if (GameSession.Seats == null || playerNumber < 1 || playerNumber > GameSession.Seats.Length) return null;
+        return GameSession.Seats[playerNumber - 1];
+    }
+
+    private static TeamSide Opposite(TeamSide side) => side == TeamSide.Left ? TeamSide.Right : TeamSide.Left;
+
+    // 旧9陣地側から呼ばれてもコンパイル・動作を壊さない互換口。
+    public void NotifyFieldChanged(TeamSide side, int fieldIndex)
+    {
+        if (matchEnded || progressManager == null) return;
+        progressManager.NotifyFieldChanged(side, fieldIndex);
+    }
+
+    public void NotifyGateBroken(TeamSide side, int fieldIndex)
+    {
+        if (matchEnded || progressManager == null) return;
+        progressManager.NotifyGateBroken(side, fieldIndex);
     }
 }

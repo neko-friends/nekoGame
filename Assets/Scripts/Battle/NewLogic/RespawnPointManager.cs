@@ -42,7 +42,13 @@ public class RespawnPointManager : MonoBehaviour
     [SerializeField]
     private Transform[] fieldRoots = new Transform[MatchLayout.FieldCount];
 
-    [Header("左陣営の復活地点")]
+    [Header("仮戦闘シーン：左右固定の地点（Progress Manager未設定時に使用）")]
+    [SerializeField] private GameObject leftRespawnPoint;
+    [SerializeField] private GameObject rightRespawnPoint;
+    [SerializeField] private GameObject leftStartPoint;
+    [SerializeField] private GameObject rightStartPoint;
+
+    [Header("旧9陣地版の地点（Progress Manager設定時に使用）")]
     [SerializeField]
     private TeamSpawnPoints leftSpawnPoints = new TeamSpawnPoints();
 
@@ -70,10 +76,14 @@ public class RespawnPointManager : MonoBehaviour
 
         if (progressManager == null)
         {
-            Debug.LogError(
-                "RespawnPointManager: TeamProgressManagerが未設定です。"
-            );
-            return false;
+            GameObject fixedPoint = side == TeamSide.Left ? leftRespawnPoint : rightRespawnPoint;
+            if (fixedPoint == null)
+            {
+                Debug.LogError($"RespawnPointManager：{side}の復活地点が未設定です。", this);
+                return false;
+            }
+            position = fixedPoint.transform.position;
+            return true;
         }
 
         TeamSpawnPoints spawnPoints =
@@ -138,6 +148,32 @@ public class RespawnPointManager : MonoBehaviour
         // 空オブジェクトのワールド座標を取得する。
         position = spawnObject.transform.position;
 
+        return true;
+    }
+
+    /// <summary>試合開始時の配置位置を取得する。開始地点未設定なら復活地点を使う。</summary>
+    public bool TryGetStartPosition(TeamSide side, out Vector2 position)
+    {
+        position = Vector2.zero;
+        if (progressManager != null)
+        {
+            TeamSpawnPoints spawnPoints = side == TeamSide.Left ? leftSpawnPoints : rightSpawnPoints;
+            GameObject point = spawnPoints.initialCenter;
+            if (point == null)
+                return TryGetSpawnPosition(side, out position);
+            position = point.transform.position;
+            return true;
+        }
+
+        GameObject startPoint = side == TeamSide.Left ? leftStartPoint : rightStartPoint;
+        if (startPoint == null)
+            startPoint = side == TeamSide.Left ? leftRespawnPoint : rightRespawnPoint;
+        if (startPoint == null)
+        {
+            Debug.LogError($"RespawnPointManager：{side}の開始地点・復活地点が未設定です。", this);
+            return false;
+        }
+        position = startPoint.transform.position;
         return true;
     }
 

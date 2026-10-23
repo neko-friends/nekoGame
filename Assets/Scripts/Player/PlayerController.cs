@@ -112,6 +112,8 @@ public class PlayerController : MonoBehaviour
     public int JumpsLeft { get; private set; }
     public float Hp { get; private set; }
     public float GuardDurability { get; set; }
+    /// <summary>復活後など、攻撃を受けない時間かどうか。</summary>
+    public bool IsInvincible { get; set; }
     public bool AttackHitboxActive { get; set; }       // 攻撃の判定が有効なフレームか
 
     // ガードの待ち時間(フレーム)。GuardState が設定し、FixedUpdate で減らす
@@ -341,6 +343,7 @@ public class PlayerController : MonoBehaviour
     /// <summary>攻撃を受ける。ガード中ならダメージを防ぎ、そうでなければのけぞる。</summary>
     public void ReceiveHit(HitInfo hit)
     {
+        if (IsInvincible) return;
         if (Machine.Current == Dead) return;
 
         // ガード中: ダメージなし。耐久値だけが減る
