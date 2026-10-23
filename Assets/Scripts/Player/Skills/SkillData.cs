@@ -37,6 +37,20 @@ public class SkillCue
     public string text;
 }
 
+/// <summary>
+/// 技が出す「画像オブジェクト」(拳など)。出てから消えるまで、画像と当たり判定を持つ。
+/// 判定の大きさは、画像(SkillEffectView の登録)の大きさに自動で合う。画像が無いときだけ hitSize を使う。
+/// </summary>
+[Serializable]
+public class SkillEffect
+{
+    public int frame;            // 何フレーム目に出すか
+    public string effectKey;     // SkillEffectView に登録した名前
+    public Vector2 offset;       // 猫の中心からのずれ(猫の体の大きさ=1。横は向きに合わせて反転)
+    public int lifeFrames;       // 何フレーム出しておくか
+    public Vector2 hitSize;      // 画像が無いときの判定の大きさ(猫の体の大きさ=1)
+}
+
 /// <summary>1つの必殺技の内容。「何フレーム目に何をするか」をデータで持つ。</summary>
 [Serializable]
 public class SkillData
@@ -47,6 +61,7 @@ public class SkillData
 
     public List<SkillHitWindow> hits = new List<SkillHitWindow>();
     public List<SkillCue> cues = new List<SkillCue>();
+    public List<SkillEffect> effects = new List<SkillEffect>();   // 拳など、画像と判定を持つオブジェクト
 
     // 上昇(riseBodyHeights が 0 なら上昇しない)
     public float riseBodyHeights;   // 猫の体の高さの何倍上がるか
@@ -90,20 +105,27 @@ public static class SkillLibrary
         // 【仮】画像4は猫と同じ大きさ、画像5は1.5倍(「一回り大きい」の解釈)
         s.hits.Add(new SkillHitWindow
         {
-            startFrame = SkillTiming.ImageStart(4), endFrame = SkillTiming.ImageEnd(4),
-            offset = Vector2.zero, size = new Vector2(1f, 1f), group = 0
+            startFrame = SkillTiming.ImageStart(4),
+            endFrame = SkillTiming.ImageEnd(4),
+            offset = Vector2.zero,
+            size = new Vector2(1f, 1f),
+            group = 0
         });
         s.hits.Add(new SkillHitWindow
         {
-            startFrame = SkillTiming.ImageStart(5), endFrame = SkillTiming.ImageEnd(5),
-            offset = Vector2.zero, size = new Vector2(1.5f, 1.5f), group = 0
+            startFrame = SkillTiming.ImageStart(5),
+            endFrame = SkillTiming.ImageEnd(5),
+            offset = Vector2.zero,
+            size = new Vector2(1.5f, 1.5f),
+            group = 0
         });
 
         s.cues.Add(new SkillCue { frame = 24, text = "拒否" });
         return s;
     }
 
-    // 左右必殺: 画像2から向いている方向に連続のこぶし。画像2と3を同じ間隔で5回繰り返す
+    // 左右必殺: 画像2から、向いている方向に拳の画像を出す(画像と判定を持つ)。
+    // 画像2と3を同じ間隔で5回繰り返す。拳は1回ごとに1つずつ出て、それぞれが1回だけ当たる。
     private static SkillData KyohiNekoSide()
     {
         const int repeats = 5;
@@ -119,13 +141,14 @@ public static class SkillLibrary
 
         for (int i = 0; i < repeats; i++)
         {
-            int start = SkillTiming.ImageStart(2) + cycle * i;
-
-            // 【仮】こぶしの位置と大きさ。1回ごとに別のグループ(それぞれ1回ずつ当たる)
-            s.hits.Add(new SkillHitWindow
+            // 【仮】拳の出す位置と、画像が無いときの判定の大きさ
+            s.effects.Add(new SkillEffect
             {
-                startFrame = start, endFrame = start + cycle - 1,
-                offset = new Vector2(1f, 0f), size = new Vector2(1.2f, 0.5f), group = i + 1
+                frame = SkillTiming.ImageStart(2) + cycle * i,
+                effectKey = "sideSpecialFist",
+                offset = new Vector2(1f, 0f),
+                lifeFrames = cycle,
+                hitSize = new Vector2(1.2f, 0.5f)
             });
         }
 
@@ -140,8 +163,11 @@ public static class SkillLibrary
 
         s.hits.Add(new SkillHitWindow
         {
-            startFrame = SkillTiming.ImageStart(3), endFrame = 30,
-            offset = Vector2.zero, size = new Vector2(1f, 1f), group = 0
+            startFrame = SkillTiming.ImageStart(3),
+            endFrame = 30,
+            offset = Vector2.zero,
+            size = new Vector2(1f, 1f),
+            group = 0
         });
 
         s.riseBodyHeights = 3f;
@@ -159,8 +185,11 @@ public static class SkillLibrary
 
         s.hits.Add(new SkillHitWindow
         {
-            startFrame = SkillTiming.ImageStart(4), endFrame = 30,
-            offset = Vector2.zero, size = new Vector2(1f, 1f), group = 0
+            startFrame = SkillTiming.ImageStart(4),
+            endFrame = 30,
+            offset = Vector2.zero,
+            size = new Vector2(1f, 1f),
+            group = 0
         });
 
         s.cues.Add(new SkillCue { frame = 24, text = "寝る" });
