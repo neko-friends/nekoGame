@@ -181,10 +181,22 @@ public class ResultManager : MonoBehaviour
 
     private void ShowVerdict()
     {
-        // 1Pの場所には白猫、2Pの場所には黒猫。勝った方は勝訴、負けた方は敗訴の絵を入れる
-        SetSprite(verdictImageP1, GetCatSprite(0, winnerIndex == 0));
-        SetSprite(verdictImageP2, GetCatSprite(1, winnerIndex == 1));
+        // 勝者を左、敗者を右に表示する
+        int loserIndex = 1 - winnerIndex;
 
+        // 左側：勝者の猫（勝利画像）
+        SetSprite(
+            verdictImageP1,
+            GetCatSprite(winnerIndex, true)
+        );
+
+        // 右側：敗者の猫（敗北画像）
+        SetSprite(
+            verdictImageP2,
+            GetCatSprite(loserIndex, false)
+        );
+
+        // 勝者のプレイヤー番号を表示
         if (winnerText != null)
         {
             winnerText.text = $"{winnerIndex + 1}P WIN!";
