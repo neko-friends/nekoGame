@@ -22,12 +22,23 @@ MonoBehaviour:
     sequence: 
     loop: 1
   run:
-    sprites: []
+    sprites:
+    - {fileID: -5453661338990849260, guid: 5754bf1ff68212047ad459e17fff8ccf, type: 3}
+    - {fileID: -5978194904713443589, guid: ade645bd740322346b4c46cd5dd64fb0, type: 3}
+    - {fileID: 4750170738213664555, guid: 155d854cb5b72f84285b058019121de2, type: 3}
+    - {fileID: 9115385895548795334, guid: 55cfce3e208360c459acb78a3674c071, type: 3}
+    - {fileID: 3211771649962884160, guid: bdb91c45c4bdee146bab2d19b7da52da, type: 3}
     framesPerSprite: 6
     sequence: 
     loop: 1
   jumpUp:
-    sprites: []
+    sprites:
+    - {fileID: -6071927565990112709, guid: 87f28f41499814749acbbdb467ef38c6, type: 3}
+    - {fileID: 1579031967121363163, guid: ee35b8dfa8ad81a42b2373d25abdc422, type: 3}
+    - {fileID: -6766600790819309334, guid: 6e97c65fb4bb2214b80daf14b43db792, type: 3}
+    - {fileID: -7421690783947948782, guid: 916fc8cb223b6c74887fee9a1e038955, type: 3}
+    - {fileID: -3360163880263524433, guid: aec6c2785241c0345a1ee98d444452a9, type: 3}
+    - {fileID: 8416220399205079071, guid: 46110b8ae528090488ba0722c6bf723b, type: 3}
     framesPerSprite: 6
     sequence: 
     loop: 0
